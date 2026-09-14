@@ -48,11 +48,7 @@ create table if not exists public.audit_logs(
 
 create or replace function public.is_admin() returns boolean language sql stable security definer set search_path=public as $$ select exists(select 1 from public.profiles where id=auth.uid() and role='super_admin' and active); $$;
 create or replace function public.my_role() returns public.app_role language sql stable security definer set search_path=public as $$ select role from public.profiles where id=auth.uid(); $$;
-<<<<<<< HEAD
-create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path=public as $$ begin insert into public.profiles(id,full_name,phone,role) values(new.id,coalesce(new.raw_user_meta_data->>'full_name',''),new.raw_user_meta_data->>'phone',case when coalesce(new.raw_user_meta_data->>'signup_role','')='captain' then 'captain'::public.app_role else 'captain'::public.app_role end) on conflict(id) do nothing; return new; end $$;
-=======
 create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path=public as $$ begin insert into public.profiles(id,full_name,phone) values(new.id,coalesce(new.raw_user_meta_data->>'full_name',''),new.raw_user_meta_data->>'phone') on conflict(id) do nothing; return new; end $$;
->>>>>>> a0a6d5464902ffa13ddfbf5199248c7766b1b556
 drop trigger if exists on_auth_user_created on auth.users; create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
 
 create or replace function public.claim_captain_invite(p_code text) returns boolean language plpgsql security definer set search_path=public as $$ declare inv public.captain_invites; begin select * into inv from public.captain_invites where code=upper(trim(p_code)) and used_by is null and (expires_at is null or expires_at>now()) for update; if not found then return false; end if; update public.profiles set role='captain',parent_id=inv.owner_id where id=auth.uid(); insert into public.captains(profile_id,owner_id,vehicle,plate_number) values(auth.uid(),inv.owner_id,inv.vehicle,inv.plate_number) on conflict(profile_id) do update set owner_id=excluded.owner_id,vehicle=excluded.vehicle,plate_number=excluded.plate_number; update public.captain_invites set used_by=auth.uid() where id=inv.id; return true; end $$;
@@ -83,23 +79,3 @@ drop policy if exists audit_admin on public.audit_logs; create policy audit_admi
 -- Then add storage RLS policies appropriate to your deployment.
 -- IMPORTANT: create the first super admin manually after signup:
 -- update public.profiles set role='super_admin' where id='USER_UUID';
-<<<<<<< HEAD
-
-
--- PUBLIC FEED: published posts are intentionally readable without authentication.
-drop policy if exists posts_public_published on public.posts;
-create policy posts_public_published on public.posts for select to anon using(status='published');
-
-create index if not exists posts_public_feed_idx on public.posts(status, created_at desc);
-create index if not exists posts_section_idx on public.posts(section, status, created_at desc);
-create index if not exists orders_created_idx on public.orders(created_at desc);
-
-create or replace function public.touch_updated_at() returns trigger language plpgsql as $$ begin new.updated_at=now(); return new; end $$;
-drop trigger if exists profiles_touch on public.profiles; create trigger profiles_touch before update on public.profiles for each row execute procedure public.touch_updated_at();
-drop trigger if exists posts_touch on public.posts; create trigger posts_touch before update on public.posts for each row execute procedure public.touch_updated_at();
-drop trigger if exists orders_touch on public.orders; create trigger orders_touch before update on public.orders for each row execute procedure public.touch_updated_at();
-
--- Optional image bucket. Run once if you want image uploads from the dashboard.
-insert into storage.buckets(id,name,public) values('post-images','post-images',true) on conflict(id) do update set public=true;
-=======
->>>>>>> a0a6d5464902ffa13ddfbf5199248c7766b1b556
