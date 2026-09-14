@@ -1,517 +1,81 @@
--- =================================================================
--- SHAKH Super App: All-In-One Production Schema
--- Safe, Idempotent, Complete Schema for fresh or existing Supabase instances
--- Run this once in the Supabase SQL Editor.
--- =================================================================
+-- SHAKH V2 / Supabase production schema
+create extension if not exists pgcrypto;
 
--- 1. UUID Extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+do $$ begin create type public.app_role as enum ('super_admin','captain','restaurant','supermarket','clothing','beauty','auto','customer'); exception when duplicate_object then null; end $$;
+do $$ begin create type public.post_status as enum ('pending','published','rejected','blacklisted'); exception when duplicate_object then null; end $$;
+do $$ begin create type public.order_status as enum ('new','accepted','preparing','out_for_delivery','delivered','cancelled'); exception when duplicate_object then null; end $$;
+do $$ begin create type public.transaction_type as enum ('merchant_payment','delivery_fee','goods_amount','platform_fee','refund','adjustment'); exception when duplicate_object then null; end $$;
 
--- 2. Custom Enum Types
-DO $$ 
-BEGIN
-  -- role_type enum
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'role_type') THEN
-    CREATE TYPE role_type AS ENUM (
-      'SUPER_ADMIN', 'ADMIN', 'SUPPORT', 'CAPTAIN', 'CUSTOMER',
-      'RESTAURANT', 'SUPERMARKET', 'FASHION', 'UMRAH', 'CAR_SELLER', 'BEAUTY', 'TECH',
-      'FOOD_MERCHANT', 'MARKET_MERCHANT', 'FASHION_MERCHANT', 'CARS_MERCHANT', 'TECH_MERCHANT'
-    );
-  ELSE
-    BEGIN ALTER TYPE role_type ADD VALUE IF NOT EXISTS 'FOOD_MERCHANT'; EXCEPTION WHEN duplicate_object THEN NULL; END;
-    BEGIN ALTER TYPE role_type ADD VALUE IF NOT EXISTS 'MARKET_MERCHANT'; EXCEPTION WHEN duplicate_object THEN NULL; END;
-    BEGIN ALTER TYPE role_type ADD VALUE IF NOT EXISTS 'FASHION_MERCHANT'; EXCEPTION WHEN duplicate_object THEN NULL; END;
-    BEGIN ALTER TYPE role_type ADD VALUE IF NOT EXISTS 'CARS_MERCHANT'; EXCEPTION WHEN duplicate_object THEN NULL; END;
-    BEGIN ALTER TYPE role_type ADD VALUE IF NOT EXISTS 'TECH_MERCHANT'; EXCEPTION WHEN duplicate_object THEN NULL; END;
-    BEGIN ALTER TYPE role_type ADD VALUE IF NOT EXISTS 'TECH'; EXCEPTION WHEN duplicate_object THEN NULL; END;
-    BEGIN ALTER TYPE role_type ADD VALUE IF NOT EXISTS 'SUPPORT'; EXCEPTION WHEN duplicate_object THEN NULL; END;
-  END IF;
-
-  -- order_status enum
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'order_status') THEN
-    CREATE TYPE order_status AS ENUM (
-      'NEW', 'ACCEPTED', 'PREPARING', 'READY', 'CAPTAIN_ASSIGNED', 'PICKED_UP', 'ON_THE_WAY', 'DELIVERED', 'CANCELLED'
-    );
-  END IF;
-
-  -- payment_status enum
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status') THEN
-    CREATE TYPE payment_status AS ENUM (
-      'PENDING', 'AUTHORIZED', 'PAID', 'FAILED', 'REFUNDED', 'CANCELLED'
-    );
-  END IF;
-
-  -- business_type enum
-  IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'business_type') THEN
-    CREATE TYPE business_type AS ENUM (
-      'RESTAURANT', 'SUPERMARKET', 'FASHION', 'UMRAH', 'CAR', 'BEAUTY'
-    );
-  END IF;
-END $$;
-
--- 3. Core Tables
-
--- PROFILES
-CREATE TABLE IF NOT EXISTS profiles (
-    id UUID REFERENCES auth.users(id) PRIMARY KEY,
-    full_name TEXT NOT NULL,
-    phone TEXT UNIQUE,
-    email TEXT UNIQUE,
-    avatar TEXT,
-    language TEXT DEFAULT 'ku',
-    theme_preference TEXT DEFAULT 'dark',
-    status TEXT DEFAULT 'active',
-    fcm_token TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+create table if not exists public.profiles(
+ id uuid primary key references auth.users(id) on delete cascade,
+ full_name text not null default '', phone text, role public.app_role not null default 'customer',
+ parent_id uuid references public.profiles(id) on delete set null, active boolean not null default true,
+ created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists public.posts(
+ id uuid primary key default gen_random_uuid(), author_id uuid not null references public.profiles(id) on delete cascade,
+ section public.app_role not null, post_type text not null default 'product', title text not null, description text not null default '',
+ price numeric(14,2) not null default 0, images text[] not null default '{}', delivery_fee numeric(14,2) not null default 0,
+ platform_fee numeric(14,2) not null default 0, car_make text, car_model text, car_year int, car_mileage int, car_location text,
+ status public.post_status not null default 'pending', rejection_reason text, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists public.captain_invites(
+ id uuid primary key default gen_random_uuid(), owner_id uuid not null references public.profiles(id) on delete cascade,
+ code text unique not null, vehicle text, plate_number text, used_by uuid references public.profiles(id) on delete set null,
+ expires_at timestamptz default (now()+interval '30 days'), created_at timestamptz not null default now()
+);
+create table if not exists public.captains(
+ id uuid primary key default gen_random_uuid(), profile_id uuid unique not null references public.profiles(id) on delete cascade,
+ owner_id uuid not null references public.profiles(id) on delete cascade, vehicle text, plate_number text,
+ is_available boolean not null default true, total_delivery_earnings numeric(14,2) not null default 0, created_at timestamptz not null default now()
+);
+create table if not exists public.orders(
+ id uuid primary key default gen_random_uuid(), customer_id uuid not null references public.profiles(id), merchant_id uuid references public.profiles(id),
+ captain_id uuid references public.profiles(id), goods_amount numeric(14,2) not null default 0, delivery_fee numeric(14,2) not null default 0,
+ platform_fee numeric(14,2) not null default 0, total_amount numeric(14,2) generated always as (goods_amount+delivery_fee+platform_fee) stored,
+ merchant_due numeric(14,2) generated always as (goods_amount) stored, captain_due numeric(14,2) generated always as (delivery_fee) stored,
+ platform_revenue numeric(14,2) generated always as (platform_fee) stored, status public.order_status not null default 'new', notes text not null default '', created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+);
+create table if not exists public.financial_transactions(
+ id uuid primary key default gen_random_uuid(), order_id uuid references public.orders(id) on delete set null, actor_id uuid references public.profiles(id) on delete set null,
+ transaction_type public.transaction_type not null, amount numeric(14,2) not null, direction text not null check(direction in ('in','out')),
+ note text not null default '', settled boolean not null default false, created_at timestamptz not null default now()
+);
+create table if not exists public.audit_logs(
+ id uuid primary key default gen_random_uuid(), actor_id uuid references public.profiles(id) on delete set null, action text not null,
+ entity_type text not null, entity_id uuid, metadata jsonb not null default '{}', created_at timestamptz not null default now()
 );
 
--- Ensure profiles columns exist if profiles was created previously
-ALTER TABLE profiles
-  ADD COLUMN IF NOT EXISTS theme_preference TEXT DEFAULT 'dark',
-  ADD COLUMN IF NOT EXISTS fcm_token TEXT,
-  ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'ku',
-  ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'active';
+create or replace function public.is_admin() returns boolean language sql stable security definer set search_path=public as $$ select exists(select 1 from public.profiles where id=auth.uid() and role='super_admin' and active); $$;
+create or replace function public.my_role() returns public.app_role language sql stable security definer set search_path=public as $$ select role from public.profiles where id=auth.uid(); $$;
+create or replace function public.handle_new_user() returns trigger language plpgsql security definer set search_path=public as $$ begin insert into public.profiles(id,full_name,phone) values(new.id,coalesce(new.raw_user_meta_data->>'full_name',''),new.raw_user_meta_data->>'phone') on conflict(id) do nothing; return new; end $$;
+drop trigger if exists on_auth_user_created on auth.users; create trigger on_auth_user_created after insert on auth.users for each row execute procedure public.handle_new_user();
 
--- USER ROLES
-CREATE TABLE IF NOT EXISTS user_roles (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
-    role role_type NOT NULL,
-    status TEXT DEFAULT 'pending', -- pending, approved, rejected
-    approved_by UUID REFERENCES profiles(id),
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, role)
-);
+create or replace function public.claim_captain_invite(p_code text) returns boolean language plpgsql security definer set search_path=public as $$ declare inv public.captain_invites; begin select * into inv from public.captain_invites where code=upper(trim(p_code)) and used_by is null and (expires_at is null or expires_at>now()) for update; if not found then return false; end if; update public.profiles set role='captain',parent_id=inv.owner_id where id=auth.uid(); insert into public.captains(profile_id,owner_id,vehicle,plate_number) values(auth.uid(),inv.owner_id,inv.vehicle,inv.plate_number) on conflict(profile_id) do update set owner_id=excluded.owner_id,vehicle=excluded.vehicle,plate_number=excluded.plate_number; update public.captain_invites set used_by=auth.uid() where id=inv.id; return true; end $$;
+create or replace function public.create_order(p_customer_id uuid,p_merchant_id uuid,p_goods_amount numeric,p_delivery_fee numeric,p_platform_fee numeric,p_notes text default '') returns uuid language plpgsql security definer set search_path=public as $$ declare oid uuid; begin if auth.uid()<>p_customer_id and not public.is_admin() then raise exception 'unauthorized'; end if; insert into public.orders(customer_id,merchant_id,goods_amount,delivery_fee,platform_fee,notes) values(p_customer_id,p_merchant_id,greatest(p_goods_amount,0),greatest(p_delivery_fee,0),greatest(p_platform_fee,0),coalesce(p_notes,'')) returning id into oid; insert into public.financial_transactions(order_id,actor_id,transaction_type,amount,direction,note) values(oid,p_customer_id,'goods_amount',greatest(p_goods_amount,0),'in','پارەی کاڵا'),(oid,p_customer_id,'delivery_fee',greatest(p_delivery_fee,0),'in','پارەی گەیاندن'),(oid,p_customer_id,'platform_fee',greatest(p_platform_fee,0),'in','پارەی پلاتفۆرمی شاخ'); return oid; end $$;
+create or replace function public.audit(p_action text,p_entity_type text,p_entity_id uuid,p_metadata jsonb default '{}') returns void language plpgsql security definer set search_path=public as $$ begin insert into public.audit_logs(actor_id,action,entity_type,entity_id,metadata) values(auth.uid(),p_action,p_entity_type,p_entity_id,coalesce(p_metadata,'{}')); end $$;
 
--- Ensure user_roles has user_id if table existed previously with a different structure
-ALTER TABLE user_roles
-  ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES profiles(id) ON DELETE CASCADE;
+alter table public.profiles enable row level security; alter table public.posts enable row level security; alter table public.captain_invites enable row level security; alter table public.captains enable row level security; alter table public.orders enable row level security; alter table public.financial_transactions enable row level security; alter table public.audit_logs enable row level security;
 
--- BUSINESSES
-CREATE TABLE IF NOT EXISTS businesses (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    owner_id UUID REFERENCES profiles(id),
-    type business_type NOT NULL,
-    name TEXT NOT NULL,
-    description TEXT,
-    logo TEXT,
-    cover_image TEXT,
-    status TEXT DEFAULT 'active',
-    is_open BOOLEAN DEFAULT true,
-    latitude DOUBLE PRECISION,
-    longitude DOUBLE PRECISION,
-    address TEXT,
-    commission_rate DECIMAL(5,2) DEFAULT 10.00,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
+drop policy if exists profiles_select on public.profiles; create policy profiles_select on public.profiles for select to authenticated using(id=auth.uid() or public.is_admin() or parent_id=auth.uid());
+drop policy if exists profiles_update on public.profiles; create policy profiles_update on public.profiles for update to authenticated using(id=auth.uid() or public.is_admin()) with check(id=auth.uid() or public.is_admin());
+drop policy if exists posts_select on public.posts; create policy posts_select on public.posts for select to anon,authenticated using(status='published' or author_id=auth.uid() or public.is_admin() or section=public.my_role());
+drop policy if exists posts_insert on public.posts; create policy posts_insert on public.posts for insert to authenticated with check(author_id=auth.uid() and (public.is_admin() or section=public.my_role() or post_type='car'));
+drop policy if exists posts_update on public.posts; create policy posts_update on public.posts for update to authenticated using(author_id=auth.uid() or public.is_admin()) with check(author_id=auth.uid() or public.is_admin());
+drop policy if exists posts_delete on public.posts; create policy posts_delete on public.posts for delete to authenticated using(public.is_admin());
+drop policy if exists invites_select on public.captain_invites; create policy invites_select on public.captain_invites for select to authenticated using(owner_id=auth.uid() or public.is_admin());
+drop policy if exists invites_insert on public.captain_invites; create policy invites_insert on public.captain_invites for insert to authenticated with check(owner_id=auth.uid() or public.is_admin());
+drop policy if exists captains_select on public.captains; create policy captains_select on public.captains for select to authenticated using(owner_id=auth.uid() or profile_id=auth.uid() or public.is_admin());
+drop policy if exists captains_update on public.captains; create policy captains_update on public.captains for update to authenticated using(owner_id=auth.uid() or profile_id=auth.uid() or public.is_admin()) with check(owner_id=auth.uid() or profile_id=auth.uid() or public.is_admin());
+drop policy if exists orders_select on public.orders; create policy orders_select on public.orders for select to authenticated using(customer_id=auth.uid() or merchant_id=auth.uid() or captain_id=auth.uid() or public.is_admin());
+drop policy if exists orders_insert on public.orders; create policy orders_insert on public.orders for insert to authenticated with check(customer_id=auth.uid() or public.is_admin());
+drop policy if exists orders_update on public.orders; create policy orders_update on public.orders for update to authenticated using(customer_id=auth.uid() or merchant_id=auth.uid() or captain_id=auth.uid() or public.is_admin()) with check(customer_id=auth.uid() or merchant_id=auth.uid() or captain_id=auth.uid() or public.is_admin());
+drop policy if exists finance_select on public.financial_transactions; create policy finance_select on public.financial_transactions for select to authenticated using(actor_id=auth.uid() or public.is_admin());
+drop policy if exists finance_admin_insert on public.financial_transactions; create policy finance_admin_insert on public.financial_transactions for insert to authenticated with check(public.is_admin());
+drop policy if exists audit_admin on public.audit_logs; create policy audit_admin on public.audit_logs for all to authenticated using(public.is_admin()) with check(public.is_admin());
 
--- CATEGORIES
-CREATE TABLE IF NOT EXISTS categories (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    business_id UUID REFERENCES businesses(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    name_ku TEXT,
-    name_ar TEXT,
-    image TEXT,
-    sort_order INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- PRODUCTS
-CREATE TABLE IF NOT EXISTS products (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    business_id UUID REFERENCES businesses(id) ON DELETE CASCADE,
-    category_id UUID REFERENCES categories(id) ON DELETE SET NULL,
-    name TEXT NOT NULL,
-    description TEXT,
-    price DECIMAL(10,2) NOT NULL,
-    discount DECIMAL(10,2) DEFAULT 0,
-    stock INTEGER DEFAULT 0,
-    images TEXT[],
-    is_available BOOLEAN DEFAULT true,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Ensure products metadata column exists
-ALTER TABLE products ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
-
--- ORDERS
-CREATE TABLE IF NOT EXISTS orders (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    order_number TEXT UNIQUE NOT NULL,
-    customer_id UUID REFERENCES profiles(id),
-    business_id UUID REFERENCES businesses(id),
-    captain_id UUID REFERENCES profiles(id),
-    status order_status DEFAULT 'NEW',
-    payment_status payment_status DEFAULT 'PENDING',
-    subtotal DECIMAL(10,2) NOT NULL,
-    discount DECIMAL(10,2) DEFAULT 0,
-    delivery_fee DECIMAL(10,2) DEFAULT 0,
-    platform_fee DECIMAL(10,2) DEFAULT 0,
-    total DECIMAL(10,2) NOT NULL,
-    commission DECIMAL(10,2) DEFAULT 0,
-    address JSONB NOT NULL,
-    latitude DOUBLE PRECISION,
-    longitude DOUBLE PRECISION,
-    notes TEXT,
-    category TEXT DEFAULT 'food',
-    estimated_delivery_minutes INTEGER DEFAULT 25,
-    is_scheduled BOOLEAN DEFAULT false,
-    scheduled_date TEXT,
-    scheduled_time TEXT,
-    scheduled_slot_label TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Ensure orders columns exist
-ALTER TABLE orders
-  ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'food',
-  ADD COLUMN IF NOT EXISTS estimated_delivery_minutes INTEGER DEFAULT 25,
-  ADD COLUMN IF NOT EXISTS is_scheduled BOOLEAN DEFAULT false,
-  ADD COLUMN IF NOT EXISTS scheduled_date TEXT,
-  ADD COLUMN IF NOT EXISTS scheduled_time TEXT,
-  ADD COLUMN IF NOT EXISTS scheduled_slot_label TEXT;
-
--- ORDER ITEMS
-CREATE TABLE IF NOT EXISTS order_items (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    order_id UUID REFERENCES orders(id) ON DELETE CASCADE,
-    product_id UUID REFERENCES products(id),
-    quantity INTEGER NOT NULL,
-    unit_price DECIMAL(10,2) NOT NULL,
-    discount DECIMAL(10,2) DEFAULT 0,
-    total DECIMAL(10,2) NOT NULL,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- DELIVERY ADDRESSES
-CREATE TABLE IF NOT EXISTS delivery_addresses (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    title TEXT NOT NULL,
-    tag TEXT DEFAULT 'home',
-    city TEXT NOT NULL,
-    district TEXT,
-    sub_district TEXT,
-    street_address TEXT NOT NULL,
-    building_name TEXT,
-    floor_apartment TEXT,
-    nearest_landmark TEXT,
-    latitude DOUBLE PRECISION NOT NULL,
-    longitude DOUBLE PRECISION NOT NULL,
-    phone_contact TEXT,
-    driver_instructions TEXT,
-    is_default BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- CAPTAIN LOCATIONS
-CREATE TABLE IF NOT EXISTS captain_locations (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    captain_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL UNIQUE,
-    latitude DOUBLE PRECISION NOT NULL,
-    longitude DOUBLE PRECISION NOT NULL,
-    heading DOUBLE PRECISION DEFAULT 0,
-    speed DOUBLE PRECISION DEFAULT 0,
-    is_online BOOLEAN DEFAULT true,
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- CAPTAIN SETTLEMENTS
-CREATE TABLE IF NOT EXISTS captain_settlements (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    captain_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    amount_returned DECIMAL(12,2) NOT NULL,
-    previous_balance DECIMAL(12,2) DEFAULT 0,
-    new_balance DECIMAL(12,2) DEFAULT 0,
-    breakdown JSONB DEFAULT '{}'::jsonb,
-    payment_method TEXT NOT NULL,
-    received_by UUID REFERENCES profiles(id) ON DELETE SET NULL,
-    reference_code TEXT UNIQUE,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- FEED POSTS
-CREATE TABLE IF NOT EXISTS posts (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    business_id UUID REFERENCES businesses(id) ON DELETE SET NULL,
-    title TEXT,
-    content TEXT NOT NULL,
-    content_ku TEXT,
-    content_ar TEXT,
-    content_en TEXT,
-    images TEXT[] DEFAULT '{}',
-    tags TEXT[] DEFAULT '{}',
-    category TEXT DEFAULT 'all',
-    likes_count INTEGER DEFAULT 0,
-    comments_count INTEGER DEFAULT 0,
-    shares_count INTEGER DEFAULT 0,
-    views_count INTEGER DEFAULT 0,
-    location_name TEXT,
-    status TEXT DEFAULT 'approved',
-    product_id UUID REFERENCES products(id) ON DELETE SET NULL,
-    deal JSONB DEFAULT '{}'::jsonb,
-    metadata JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- COMMENTS
-CREATE TABLE IF NOT EXISTS comments (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    post_id UUID REFERENCES posts(id) ON DELETE CASCADE NOT NULL,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    content TEXT NOT NULL,
-    likes_count INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- LIKES
-CREATE TABLE IF NOT EXISTS likes (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    post_id UUID REFERENCES posts(id) ON DELETE CASCADE,
-    comment_id UUID REFERENCES comments(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'unique_user_post_like') THEN
-    ALTER TABLE likes ADD CONSTRAINT unique_user_post_like UNIQUE (user_id, post_id);
-  END IF;
-END $$;
-
--- STORIES
-CREATE TABLE IF NOT EXISTS stories (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE NOT NULL,
-    business_id UUID REFERENCES businesses(id) ON DELETE SET NULL,
-    media_url TEXT NOT NULL,
-    title TEXT,
-    expires_at TIMESTAMPTZ DEFAULT (NOW() + INTERVAL '24 hours'),
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- WALLETS
-CREATE TABLE IF NOT EXISTS wallets (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) UNIQUE,
-    balance DECIMAL(12,2) DEFAULT 0,
-    pending_balance DECIMAL(12,2) DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE wallets ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES profiles(id) UNIQUE;
-
--- WALLET TRANSACTIONS
-CREATE TABLE IF NOT EXISTS wallet_transactions (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    wallet_id UUID REFERENCES wallets(id),
-    type TEXT NOT NULL,
-    amount DECIMAL(10,2) NOT NULL,
-    reference_id UUID,
-    description TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- NOTIFICATIONS
-CREATE TABLE IF NOT EXISTS notifications (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    body TEXT NOT NULL,
-    type TEXT DEFAULT 'general',
-    data JSONB DEFAULT '{}'::jsonb,
-    is_read BOOLEAN DEFAULT false,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
-ALTER TABLE notifications ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES profiles(id) ON DELETE CASCADE;
-
--- 4. Automatic updated_at Trigger
-CREATE OR REPLACE FUNCTION set_updated_at_timestamp()
-RETURNS TRIGGER AS $$
-BEGIN
-  NEW.updated_at = NOW();
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'tr_delivery_addresses_updated_at') THEN
-    CREATE TRIGGER tr_delivery_addresses_updated_at BEFORE UPDATE ON delivery_addresses FOR EACH ROW EXECUTE FUNCTION set_updated_at_timestamp();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'tr_posts_updated_at') THEN
-    CREATE TRIGGER tr_posts_updated_at BEFORE UPDATE ON posts FOR EACH ROW EXECUTE FUNCTION set_updated_at_timestamp();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'tr_wallets_updated_at') THEN
-    CREATE TRIGGER tr_wallets_updated_at BEFORE UPDATE ON wallets FOR EACH ROW EXECUTE FUNCTION set_updated_at_timestamp();
-  END IF;
-END $$;
-
--- 5. Enable Row-Level Security (RLS)
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_roles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE businesses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE products ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE delivery_addresses ENABLE ROW LEVEL SECURITY;
-ALTER TABLE captain_locations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE captain_settlements ENABLE ROW LEVEL SECURITY;
-ALTER TABLE posts ENABLE ROW LEVEL SECURITY;
-ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE likes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE stories ENABLE ROW LEVEL SECURITY;
-ALTER TABLE wallets ENABLE ROW LEVEL SECURITY;
-ALTER TABLE wallet_transactions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
-
--- 6. Row-Level Security Policies
-
--- Profiles
-DROP POLICY IF EXISTS "Users can view own profile" ON profiles;
-CREATE POLICY "Users can view own profile" ON profiles FOR SELECT USING (auth.uid() = id);
-
-DROP POLICY IF EXISTS "Users can update own profile" ON profiles;
-CREATE POLICY "Users can update own profile" ON profiles FOR UPDATE USING (auth.uid() = id);
-
-DROP POLICY IF EXISTS "Users can insert own profile" ON profiles;
-CREATE POLICY "Users can insert own profile" ON profiles FOR INSERT WITH CHECK (auth.uid() = id);
-
--- User Roles
-DROP POLICY IF EXISTS "Users can view own roles" ON user_roles;
-CREATE POLICY "Users can view own roles" ON user_roles FOR SELECT USING (auth.uid() = user_id);
-
--- Businesses
-DROP POLICY IF EXISTS "Public can view active businesses" ON businesses;
-CREATE POLICY "Public can view active businesses" ON businesses FOR SELECT USING (status = 'active');
-
-DROP POLICY IF EXISTS "Owners can manage own businesses" ON businesses;
-CREATE POLICY "Owners can manage own businesses" ON businesses FOR ALL USING (auth.uid() = owner_id);
-
--- Products
-DROP POLICY IF EXISTS "Public can view active products" ON products;
-CREATE POLICY "Public can view active products" ON products FOR SELECT USING (is_available = true);
-
-DROP POLICY IF EXISTS "Business owners can manage products" ON products;
-CREATE POLICY "Business owners can manage products" ON products FOR ALL USING (
-    EXISTS (SELECT 1 FROM businesses WHERE businesses.id = products.business_id AND businesses.owner_id = auth.uid())
-);
-
--- Orders
-DROP POLICY IF EXISTS "Customers view own orders" ON orders;
-CREATE POLICY "Customers view own orders" ON orders FOR SELECT USING (auth.uid() = customer_id);
-
-DROP POLICY IF EXISTS "Businesses view own orders" ON orders;
-CREATE POLICY "Businesses view own orders" ON orders FOR SELECT USING (
-    EXISTS (SELECT 1 FROM businesses WHERE businesses.id = orders.business_id AND businesses.owner_id = auth.uid())
-);
-
-DROP POLICY IF EXISTS "Captains view assigned orders" ON orders;
-CREATE POLICY "Captains view assigned orders" ON orders FOR SELECT USING (auth.uid() = captain_id);
-
--- Delivery Addresses
-DROP POLICY IF EXISTS "Users can view own addresses" ON delivery_addresses;
-CREATE POLICY "Users can view own addresses" ON delivery_addresses FOR SELECT USING (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can insert own addresses" ON delivery_addresses;
-CREATE POLICY "Users can insert own addresses" ON delivery_addresses FOR INSERT WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can update own addresses" ON delivery_addresses;
-CREATE POLICY "Users can update own addresses" ON delivery_addresses FOR UPDATE USING (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can delete own addresses" ON delivery_addresses;
-CREATE POLICY "Users can delete own addresses" ON delivery_addresses FOR DELETE USING (auth.uid() = user_id);
-
--- Captain Locations
-DROP POLICY IF EXISTS "Anyone can view online captain locations" ON captain_locations;
-CREATE POLICY "Anyone can view online captain locations" ON captain_locations FOR SELECT USING (true);
-
-DROP POLICY IF EXISTS "Captains can upsert own location" ON captain_locations;
-CREATE POLICY "Captains can upsert own location" ON captain_locations FOR ALL USING (auth.uid() = captain_id);
-
--- Captain Settlements
-DROP POLICY IF EXISTS "Captains can view own settlements" ON captain_settlements;
-CREATE POLICY "Captains can view own settlements" ON captain_settlements
-  FOR SELECT USING (
-    auth.uid() = captain_id OR 
-    EXISTS (SELECT 1 FROM user_roles WHERE user_id = auth.uid() AND role IN ('SUPER_ADMIN', 'ADMIN') AND status = 'approved')
-  );
-
-DROP POLICY IF EXISTS "Admins can insert settlements" ON captain_settlements;
-CREATE POLICY "Admins can insert settlements" ON captain_settlements
-  FOR INSERT WITH CHECK (
-    EXISTS (SELECT 1 FROM user_roles WHERE user_id = auth.uid() AND role IN ('SUPER_ADMIN', 'ADMIN') AND status = 'approved')
-  );
-
--- Posts
-DROP POLICY IF EXISTS "Anyone can view approved posts" ON posts;
-CREATE POLICY "Anyone can view approved posts" ON posts
-  FOR SELECT USING (
-    status = 'approved' OR 
-    auth.uid() = user_id OR
-    EXISTS (SELECT 1 FROM user_roles WHERE user_id = auth.uid() AND role IN ('SUPER_ADMIN', 'ADMIN') AND status = 'approved')
-  );
-
-DROP POLICY IF EXISTS "Authenticated users can create posts" ON posts;
-CREATE POLICY "Authenticated users can create posts" ON posts FOR INSERT WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Authors and admins can update posts" ON posts;
-CREATE POLICY "Authors and admins can update posts" ON posts
-  FOR UPDATE USING (
-    auth.uid() = user_id OR
-    EXISTS (SELECT 1 FROM user_roles WHERE user_id = auth.uid() AND role IN ('SUPER_ADMIN', 'ADMIN') AND status = 'approved')
-  );
-
-DROP POLICY IF EXISTS "Authors and admins can delete posts" ON posts;
-CREATE POLICY "Authors and admins can delete posts" ON posts
-  FOR DELETE USING (
-    auth.uid() = user_id OR
-    EXISTS (SELECT 1 FROM user_roles WHERE user_id = auth.uid() AND role IN ('SUPER_ADMIN', 'ADMIN') AND status = 'approved')
-  );
-
--- Comments
-DROP POLICY IF EXISTS "Anyone can view comments" ON comments;
-CREATE POLICY "Anyone can view comments" ON comments FOR SELECT USING (true);
-
-DROP POLICY IF EXISTS "Authenticated users can post comments" ON comments;
-CREATE POLICY "Authenticated users can post comments" ON comments FOR INSERT WITH CHECK (auth.uid() = user_id);
-
--- Likes
-DROP POLICY IF EXISTS "Anyone can view likes" ON likes;
-CREATE POLICY "Anyone can view likes" ON likes FOR SELECT USING (true);
-
-DROP POLICY IF EXISTS "Users can manage own likes" ON likes;
-CREATE POLICY "Users can manage own likes" ON likes FOR ALL USING (auth.uid() = user_id);
-
--- Stories
-DROP POLICY IF EXISTS "Anyone can view active stories" ON stories;
-CREATE POLICY "Anyone can view active stories" ON stories FOR SELECT USING (expires_at > NOW() OR auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can insert stories" ON stories;
-CREATE POLICY "Users can insert stories" ON stories FOR INSERT WITH CHECK (auth.uid() = user_id);
-
-DROP POLICY IF EXISTS "Users can delete own stories" ON stories;
-CREATE POLICY "Users can delete own stories" ON stories FOR DELETE USING (auth.uid() = user_id);
-
--- Wallets
-DROP POLICY IF EXISTS "Users can view own wallet" ON wallets;
-CREATE POLICY "Users can view own wallet" ON wallets FOR SELECT USING (auth.uid() = user_id);
-
--- Notifications
-DROP POLICY IF EXISTS "Users can view own notifications" ON notifications;
-CREATE POLICY "Users can view own notifications" ON notifications FOR SELECT USING (auth.uid() = user_id);
+-- Recommended storage bucket for post images:
+-- insert into storage.buckets(id,name,public) values('post-images','post-images',true) on conflict(id) do nothing;
+-- Then add storage RLS policies appropriate to your deployment.
+-- IMPORTANT: create the first super admin manually after signup:
+-- update public.profiles set role='super_admin' where id='USER_UUID';

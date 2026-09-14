@@ -1,0 +1,11 @@
+{
+  "name":"شاخ | بازار و گەیاندن",
+  "short_name":"شاخ",
+  "start_url":"/",
+  "display":"standalone",
+  "dir":"rtl",
+  "lang":"ckb",
+  "background_color":"#ffffff",
+  "theme_color":"#f97316",
+  "icons":[]
+}

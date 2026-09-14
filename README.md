@@ -1,36 +1,39 @@
-# شاخ (Shakh)
+# شاخ — V3
 
-پڕۆژەی MVP بۆ بازاڕ، پۆستکردنی ئۆتۆمبێل، ڕۆڵ و داشبۆردی تایبەت، کاپتن، و بەڕێوەبردنی دارایی.
+پلاتفۆرمی بازاڕ، گەیاندن، ئۆتۆمبێل و دارایی بە React + Vite + Supabase.
 
-## دامەزراندن
+## گرنگ: چاککردنی شاشەی سپی
+V3 کێشەی شاشەی سپی چارەسەر دەکات: ئەگەر Vercel Environment Variables دانەنرابن، ئەپەکە بە fallback ـی Supabase دەستپێدەکات؛ ئەگەر profile/schema کێشەی هەبێت، لەبری splash ـی بێکۆتایی، پەیامی ڕوون پیشان دەدرێت.
 
-1. `npm install`
-2. فایل `.env.local` دروست بکە و `VITE_SUPABASE_URL` و `VITE_SUPABASE_ANON_KEY` دابنێ.
-3. `supabase/schema.sql` لە Supabase SQL Editor جێبەجێ بکە.
-4. `npm run dev`
-5. بۆ Vercel: GitHub repo ـکە پەیوەست بکە، Build Command = `npm run build` و Output = `dist`. Environment Variables ـەکان زیاد بکە.
+## Deploy لە Vercel
+1. Repository ـەکە بۆ GitHub بنێرە.
+2. لە Vercel Import بکە.
+3. Environment Variables زیاد بکە:
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+4. لە Supabase → SQL Editor فایل `supabase/schema.sql` جێبەجێ بکە.
+5. دوای signup، UUID ـی یەک بەکارهێنەر بکە `super_admin`.
 
-> تێبینی: تەنها anon/publishable key لە frontend بەکاربهێنە. Service Role Key هیچ کاتێک لە frontend مەخە.
+## تایبەتمەندیەکان
+- Role based access: Super Admin, Captain, Restaurant, Supermarket, Clothing, Beauty, Auto, Customer
+- داشبۆردی تایبەت بۆ هەر role
+- پۆستی بەشەکان و پۆستی ئۆتۆمبێل بۆ هەموو کەس
+- moderation: publish / blacklist / delete
+- captain invite و captain management
+- orders و status workflow
+- finance ledger: goods / merchant, delivery / captain, platform revenue
+- Supabase Auth + RLS + audit logs
+- RTL و responsive UI
 
-## ڕۆڵەکان
+## Security
+`anon/publishable key` تەنها بۆ frontend بەکاربهێنە. `service_role` key هەرگیز لە frontend یان Vercel client bundle مەخە.
 
-- `super_admin`: دەسەڵاتی تەواو
-- `captain`: کاپتنی گەیاندن
-- `restaurant`
-- `supermarket`
-- `clothing`
-- `beauty`
-- `auto`
-- `customer`
 
-هەر بەشێک داشبۆردی خۆی هەیە. بەکارهێنەر دەتوانێت کاپتن دروست بکات؛ کاپتن بە `parent_id` بە خاوەنەکەیەوە پەیوەست دەبێت.
+## V4 changes
+- Added React error boundary so runtime exceptions show a recovery screen instead of a blank page.
+- Added PWA manifest and service worker registration.
+- Keeps Supabase env variables with a public anon-key fallback for the supplied project.
+- Includes the V3 role, moderation, marketplace, orders, captain, finance and RLS architecture.
 
-## دارایی
-
-سیستەمەکە `orders` و `financial_transactions` هەیە بۆ:
-- پارەی کاڵا / Merchant
-- پارەی گەیاندن / Captain
-- پارەی پلاتفۆرم / Shakh
-- دۆخی settlement
-
-بۆ production، payment gateway، storage policy، audit log، verification، و notification provider پێویستی بە زیادکردنی integration هەیە.
+### Vercel
+Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. The app can still render without them using the configured public anon fallback, but production should use Vercel environment variables.
