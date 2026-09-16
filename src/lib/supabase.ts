@@ -1,18 +1,11 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-const supabaseUrl = String(import.meta.env.VITE_SUPABASE_URL || '').trim();
-const supabaseAnonKey = String(import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
+const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const anon = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-// A valid client is always created so the UI never becomes a white screen when Vercel env vars are missing.
-// Network operations fail safely and are surfaced by the app's connection state instead of crashing startup.
-const safeUrl = supabaseUrl || 'https://placeholder.supabase.co';
-const safeKey = supabaseAnonKey || 'placeholder-anon-key';
+export const supabaseConfigured =
+  Boolean(url && anon && !anon.includes("PASTE_YOUR"));
 
-export const supabase = createClient(safeUrl, safeKey, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-});
-
-export const supabaseConfig = {
-  configured: Boolean(supabaseUrl && supabaseAnonKey),
-  url: supabaseUrl,
-};
+export const supabase: SupabaseClient | null = supabaseConfigured
+  ? createClient(url!, anon!)
+  : null;
