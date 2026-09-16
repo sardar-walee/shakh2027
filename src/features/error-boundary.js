@@ -1,3 +1,0 @@
-/** Shakh V5 feature: error-boundary. Core UI is composed in main.jsx; this module is a stable extension point. */
-export const feature = 'error-boundary'
-export const version = '5.0.0'

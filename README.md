@@ -1,65 +1,60 @@
-<<<<<<< HEAD
-# شاخ (SHAKH) V5
+# SHAKH SUPER — v2
 
-نسخەی نوێی پلاتفۆرمی شاخ بۆ Vercel + Supabase.
+Multilingual marketplace and delivery platform starter for Kurdish, Arabic and English.
 
-## گرنگترین گۆڕانکارییەکانی V5
-- **Public Feed:** پۆستە `published` ـەکان بێ چوونەژوورەوە دەبینرێن.
-- **Signup تەنها بۆ Captain:** تۆمارکردن لە UI ـدا تەنها بۆ کاپتنە. ڕۆڵەکانی تر لەلایەن Super Admin دیاری دەکرێن.
-- هەموو ڕۆڵەکان: `super_admin`, `captain`, `restaurant`, `supermarket`, `clothing`, `beauty`, `auto`, `customer`.
-- Dashboard ـی جیاواز، Posts، Auto posts، Orders، Captain invites، Finance، Moderation، Users.
-- Error boundary و Vercel-safe loading.
-- Supabase RLS بۆ public published posts و داتای authenticated.
-- Public search/filter بۆ پۆستەکان.
+## Included in this update
+- All 9 roles: `super_admin`, `admin`, `captain`, `restaurant`, `supermarket`, `fashion`, `beauty`, `car_dealer`, `customer`
+- Role selector and role-specific dashboard starter
+- Product, food, fashion, beauty and car posts
+- Customer car-for-sale posting capability through the post form
+- Search and category filtering
+- Shopping cart
+- Cash on delivery flow
+- Demo wallet and transaction breakdown
+- Platform commission, merchant amount and captain amount fields
+- Kurdish / Arabic / English language switcher
+- RTL layout
+- Responsive desktop and mobile layout
+- Orange / blue / white / yellow branding
+- Supabase schema with profiles, posts, orders, order items and wallet transactions
+- Starter Row Level Security policies
+- Vercel-ready Vite project
 
-## Deploy
-1. `npm install`
-2. لە Vercel ئەم env ـانە دابنێ:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-3. `supabase/schema.sql` لە Supabase SQL Editor جێبەجێ بکە.
-4. `npm run build`
-5. Repository ـەکە لە Vercel deploy بکە.
+## Run
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
 
-**تێبینی:** Service Role Key مەخە ناو frontend.
-=======
-# شاخ — V3
+## Supabase setup
+1. Open your Supabase project.
+2. Open SQL Editor.
+3. Run `supabase/schema.sql`.
+4. Copy the public anon key into `.env`:
+```env
+VITE_SUPABASE_URL=https://pmsrrsvvhjclvtdpkbmh.supabase.co
+VITE_SUPABASE_ANON_KEY=YOUR_PUBLIC_ANON_KEY
+```
+5. Do not put a `service_role` key in frontend code.
 
-پلاتفۆرمی بازاڕ، گەیاندن، ئۆتۆمبێل و دارایی بە React + Vite + Supabase.
+## GitHub
+```bash
+git init
+git add .
+git commit -m "SHAKH SUPER v2"
+git branch -M main
+git remote add origin YOUR_GITHUB_REPOSITORY_URL
+git push -u origin main
+```
 
-## گرنگ: چاککردنی شاشەی سپی
-V3 کێشەی شاشەی سپی چارەسەر دەکات: ئەگەر Vercel Environment Variables دانەنرابن، ئەپەکە بە fallback ـی Supabase دەستپێدەکات؛ ئەگەر profile/schema کێشەی هەبێت، لەبری splash ـی بێکۆتایی، پەیامی ڕوون پیشان دەدرێت.
+## Vercel
+- Import the GitHub repository.
+- Framework preset: Vite
+- Build command: `npm run build`
+- Output directory: `dist`
+- Add the same `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` environment variables.
+- Deploy.
 
-## Deploy لە Vercel
-1. Repository ـەکە بۆ GitHub بنێرە.
-2. لە Vercel Import بکە.
-3. Environment Variables زیاد بکە:
-   - `VITE_SUPABASE_URL`
-   - `VITE_SUPABASE_ANON_KEY`
-4. لە Supabase → SQL Editor فایل `supabase/schema.sql` جێبەجێ بکە.
-5. دوای signup، UUID ـی یەک بەکارهێنەر بکە `super_admin`.
-
-## تایبەتمەندیەکان
-- Role based access: Super Admin, Captain, Restaurant, Supermarket, Clothing, Beauty, Auto, Customer
-- داشبۆردی تایبەت بۆ هەر role
-- پۆستی بەشەکان و پۆستی ئۆتۆمبێل بۆ هەموو کەس
-- moderation: publish / blacklist / delete
-- captain invite و captain management
-- orders و status workflow
-- finance ledger: goods / merchant, delivery / captain, platform revenue
-- Supabase Auth + RLS + audit logs
-- RTL و responsive UI
-
-## Security
-`anon/publishable key` تەنها بۆ frontend بەکاربهێنە. `service_role` key هەرگیز لە frontend یان Vercel client bundle مەخە.
-
-
-## V4 changes
-- Added React error boundary so runtime exceptions show a recovery screen instead of a blank page.
-- Added PWA manifest and service worker registration.
-- Keeps Supabase env variables with a public anon-key fallback for the supplied project.
-- Includes the V3 role, moderation, marketplace, orders, captain, finance and RLS architecture.
-
-### Vercel
-Set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. The app can still render without them using the configured public anon fallback, but production should use Vercel environment variables.
->>>>>>> a0a6d5464902ffa13ddfbf5199248c7766b1b556
+## Production work still required
+This is a functional frontend/MVP starter. Before real public launch, connect the UI to Supabase queries, add verified authentication, server-side role checks, payment reconciliation, image storage, notifications, address/maps, captain dispatch, audit logs, and complete admin policies.
