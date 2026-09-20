@@ -3,6 +3,7 @@
 - [ ] Run `supabase/schema.sql`
 - [ ] Run `supabase/v2_migration.sql`
 - [ ] Run `supabase/v3_migration.sql`
+- [ ] Run `supabase/v4_production_hardening.sql` after `production_repair.sql`
 - [ ] Point domain **daim-post.online** to Vercel (see `vercel.json`)
 - [ ] Create a Supabase Auth user
 - [ ] Insert/update the matching row in `profiles`
@@ -17,3 +18,4 @@
 - [ ] Add server-side authorization before production
 - [ ] Add order status transitions and captain assignment
 - [ ] Add real wallet ledger and settlement reports
+- [ ] Run `npm run typecheck`, `npm run build`, and `npm run doctor`

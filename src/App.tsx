@@ -73,45 +73,13 @@ const roleMeta: { id: Role; ku: string; ar: string; en: string; icon: React.Reac
 
 const merchantRoles: Role[] = ["restaurant", "supermarket", "fashion", "beauty", "car_dealer"];
 
-const seedPosts: DisplayPost[] = [
-  {
-    id: 1,
-    category: "supermarket",
-    title: "سەبەتەی خێزانی",
-    price: 35000,
-    emoji: "🛒",
-    owner: "سوپەرمارکێتی شاخ",
-    status: "active",
-    attributes: { product_name: "سەبەتەی خێزانی", category_name: "خۆراک", price: 35000 },
-  },
-  {
-    id: 2,
-    category: "car_dealer",
-    title: "Toyota Corolla 2018",
-    price: 18500000,
-    emoji: "🚗",
-    owner: "کڕیار",
-    status: "active",
-    attributes: {
-      listing_type: "car",
-      brand: "Toyota",
-      model: "Corolla",
-      year: 2018,
-      price: 18500000,
-      fuel: "petrol",
-      transmission: "auto",
-      condition: "good",
-    },
-  },
-];
-
 export default function App() {
   const [lang, setLang] = useState<Lang>("ku");
   const [tab, setTab] = useState("home");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [cart, setCart] = useState<DisplayPost[]>([]);
-  const [posts, setPosts] = useState<DisplayPost[]>(seedPosts);
+  const [posts, setPosts] = useState<DisplayPost[]>([]);
   const [showMenu, setShowMenu] = useState(false);
   const [notice, setNotice] = useState("");
   const [detail, setDetail] = useState<DisplayPost | null>(null);
@@ -125,6 +93,7 @@ export default function App() {
   const [settings, setSettings] = useState<PlatformSettings>(defaultSettings);
   const [customerGps, setCustomerGps] = useState<{ lat: number; lng: number } | null>(null);
   const [deliveryKm, setDeliveryKm] = useState<number | null>(null);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
 
   const [captainForm, setCaptainForm] = useState({
     email: "",
@@ -158,7 +127,11 @@ export default function App() {
       .from("posts")
       .select("*")
       .in("status", ["active", "pending_review", "pending_payment"]);
-    if (error || !data) return;
+    if (error || !data) {
+      setPosts([]);
+      setNotice(t("نەتوانرا پۆستەکان بار بکرێن", "تعذر تحميل المنشورات", "Could not load posts"));
+      return;
+    }
     setPosts(
       data.map((p) => ({
         id: p.id,
@@ -175,7 +148,7 @@ export default function App() {
         contactPhone: p.contact_phone,
       }))
     );
-  }, []);
+  }, [lang]);
 
   const loadSettings = useCallback(async () => {
     if (!supabase) return;
@@ -195,12 +168,20 @@ export default function App() {
     refreshSession();
     loadPosts();
     loadSettings();
-    if (!supabase) return;
-    const { data: sub } = supabase.auth.onAuthStateChange(() => {
+    const client = supabase;
+    if (!client) return;
+    const { data: sub } = client.auth.onAuthStateChange(() => {
       refreshSession();
       loadPosts();
     });
-    return () => sub.subscription.unsubscribe();
+    const channel = client
+      .channel("public-posts-feed")
+      .on("postgres_changes", { event: "*", schema: "public", table: "posts" }, () => loadPosts())
+      .subscribe();
+    return () => {
+      sub.subscription.unsubscribe();
+      void client.removeChannel(channel);
+    };
   }, [refreshSession, loadPosts, loadSettings]);
 
   const visible = useMemo(
@@ -319,6 +300,35 @@ export default function App() {
         .eq("id", true);
     }
     setNotice(t("ڕێکخستنەکان پاشەکەوت کران", "تم الحفظ", "Settings saved"));
+  }
+
+  async function checkout() {
+    if (!supabase || !sessionEmail) {
+      setNotice(t("بۆ داواکاری پێویستە بچیتە ژوورەوە", "يجب تسجيل الدخول للطلب", "Sign in to place an order"));
+      setTab("account");
+      return;
+    }
+    if (cart.length === 0 || cart.some((post) => typeof post.id !== "string")) {
+      setNotice(t("ئەم پۆستانە لە داتابەیس نیین", "هذه المنشورات غير متاحة", "These posts are not available for checkout"));
+      return;
+    }
+    setCheckoutBusy(true);
+    const { data, error } = await supabase.rpc("create_cash_order", {
+      p_items: cart.map((post) => ({ post_id: post.id, quantity: 1 })),
+      p_delivery_fee: deliveryFee,
+      p_address: customerGps ? `${customerGps.lat}, ${customerGps.lng}` : null,
+      p_customer_lat: customerGps?.lat ?? null,
+      p_customer_lng: customerGps?.lng ?? null,
+      p_distance_km: deliveryKm,
+    });
+    setCheckoutBusy(false);
+    if (error || !data) {
+      setNotice(t("داواکاری نەکرا", "تعذر إنشاء الطلب", "Could not create the order"));
+      return;
+    }
+    setCart([]);
+    setNotice(t("داواکارییەکەت تۆمار کرا", "تم إنشاء الطلب", "Order placed successfully"));
+    setTab("dashboard");
   }
 
   async function createCaptain(e: React.FormEvent) {
@@ -576,7 +586,15 @@ export default function App() {
           )}
 
           {tab === "cart" && (
-            <CartPanel cart={cart} setCart={setCart} money={money} t={t} deliveryFee={deliveryFee} />
+            <CartPanel
+              cart={cart}
+              setCart={setCart}
+              money={money}
+              t={t}
+              deliveryFee={deliveryFee}
+              onCheckout={checkout}
+              checkoutBusy={checkoutBusy}
+            />
           )}
 
           {tab === "wallet" && (
@@ -741,12 +759,16 @@ function CartPanel({
   money,
   t,
   deliveryFee,
+  onCheckout,
+  checkoutBusy,
 }: {
   cart: DisplayPost[];
   setCart: React.Dispatch<React.SetStateAction<DisplayPost[]>>;
   money: (n: number) => string;
   t: (a: string, b: string, c: string) => string;
   deliveryFee: number;
+  onCheckout: () => void;
+  checkoutBusy: boolean;
 }) {
   const total = cart.reduce((s, p) => s + p.price, 0) + deliveryFee;
   return (
@@ -774,7 +796,7 @@ function CartPanel({
           <div className="total">
             {t("کۆ", "المجموع", "Total")} <b>{money(total)}</b>
           </div>
-          <button type="button" className="primary">
+          <button type="button" className="primary" onClick={onCheckout} disabled={checkoutBusy}>
             {t("کاش لە گەیاندن", "دفع عند الاستلام", "Cash on delivery")}
           </button>
         </>

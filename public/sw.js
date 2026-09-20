@@ -1,4 +1,4 @@
-const CACHE = "shakh-super-v1";
+const CACHE = "shakh-super-v2";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", event => {

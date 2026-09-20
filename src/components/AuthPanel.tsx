@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { LogIn, UserPlus, KeyRound } from "lucide-react";
 
-type Mode = "login" | "signup" | "reset";
+type Mode = "login" | "signup" | "reset" | "update";
 
 type Props = {
   t: (ku: string, ar: string, en: string) => string;
@@ -22,6 +22,7 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -41,6 +42,9 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
         if (error) throw error;
         onSuccess();
       } else if (mode === "signup") {
+        if (form.password !== confirmPassword) {
+          throw new Error(t("وشەی نهێنییەکان یەکسان نین", "كلمتا المرور غير متطابقتين", "Passwords must match"));
+        }
         const { error } = await supabase.auth.signUp({
           email: form.email,
           password: form.password,
@@ -56,7 +60,7 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
             "Account created — check your email"
           )
         );
-      } else {
+      } else if (mode === "reset") {
         const { error } = await supabase.auth.resetPasswordForEmail(form.email, {
           redirectTo: `${window.location.origin}/?reset=1`,
         });
@@ -68,6 +72,13 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
             "Password reset link sent"
           )
         );
+      } else {
+        if (form.password.length < 8 || form.password !== confirmPassword) {
+          throw new Error(t("وشەی نهێنییەکان یەکسان نین", "كلمتا المرور غير متطابقتين", "Passwords must match and be at least 8 characters"));
+        }
+        const { error } = await supabase.auth.updateUser({ password: form.password });
+        if (error) throw error;
+        setMsg(t("وشەی نهێنی نوێ کرایەوە", "تم تحديث كلمة المرور", "Password updated"));
       }
     } catch (ex: unknown) {
       setErr(ex instanceof Error ? ex.message : String(ex));
@@ -76,7 +87,7 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
     }
   }
 
-  if (email) {
+  if (email && mode !== "update") {
     return (
       <div className="auth-panel compact">
         <p>
@@ -84,6 +95,9 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
         </p>
         <button type="button" className="secondary" onClick={onSignOut}>
           {t("چوونەدەرەوە", "تسجيل خروج", "Sign out")}
+        </button>
+        <button type="button" className="secondary" onClick={() => setMode("update")}>
+          {t("گۆڕینی ووشەی نهێنی", "تغيير كلمة المرور", "Change password")}
         </button>
       </div>
     );
@@ -101,6 +115,11 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
         <button type="button" className={mode === "reset" ? "active" : ""} onClick={() => setMode("reset")}>
           <KeyRound size={16} /> {t("گەڕاندنەوەی ووشەی نهێنی", "استعادة كلمة المرور", "Reset password")}
         </button>
+        {email && (
+          <button type="button" className={mode === "update" ? "active" : ""} onClick={() => setMode("update")}>
+            <KeyRound size={16} /> {t("گۆڕینی ووشە", "تغيير كلمة المرور", "Change password")}
+          </button>
+        )}
       </div>
       <form className="form auth-form" onSubmit={submit}>
         {mode === "signup" && (
@@ -137,6 +156,22 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
             />
           </>
         )}
+        {mode === "update" && (
+          <>
+            <label>{t("دووبارە ووشەی نهێنی", "تأكيد كلمة المرور", "Confirm password")}</label>
+            <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required minLength={8} />
+          </>
+        )}
+        {mode === "signup" && (
+          <>
+            <label>{t("دووبارە ووشەی نهێنی", "تأكيد كلمة المرور", "Confirm password")}</label>
+            <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required minLength={6} />
+            <label className="check-row">
+              <input type="checkbox" required />
+              {t("مەرجەکانم قبووڵە", "أوافق على الشروط", "I accept the terms")}
+            </label>
+          </>
+        )}
         {err && <p className="form-err">{err}</p>}
         {msg && <p className="form-ok">{msg}</p>}
         <button type="submit" className="primary" disabled={busy}>
@@ -144,7 +179,9 @@ export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
             ? t("چوونەژوورەوە", "دخول", "Login")
             : mode === "signup"
               ? t("دروستکردن", "إنشاء", "Create account")
-              : t("ناردن", "إرسال", "Send link")}
+              : mode === "reset"
+                ? t("ناردن", "إرسال", "Send link")
+                : t("گۆڕین", "تحديث", "Update password")}
         </button>
       </form>
     </div>
