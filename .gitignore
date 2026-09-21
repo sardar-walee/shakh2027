@@ -6,3 +6,6 @@ dist/
 !supabase/functions/.env.example
 .vercel/
 PROJECT_HEALTH.md
+
+.vercel
+.env*
