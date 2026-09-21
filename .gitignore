@@ -3,4 +3,6 @@ dist/
 .env
 .env.*
 !.env.example
+!supabase/functions/.env.example
 .vercel/
+PROJECT_HEALTH.md

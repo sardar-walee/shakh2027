@@ -15,6 +15,7 @@ import {
   Wallet,
   Package,
   Languages,
+  Bell,
   Menu,
   X,
   CheckCircle2,
@@ -30,6 +31,12 @@ import { AuthPanel } from "./components/AuthPanel";
 import { DynamicPostForm, type PostDraft } from "./components/DynamicPostForm";
 import { PostDetailView, type DisplayPost } from "./components/PostDetailView";
 import { GpsPicker } from "./components/GpsPicker";
+import {
+  AdminManagementPanel,
+  emptyAdminManagementData,
+  type AdminAction,
+  type AdminManagementData,
+} from "./components/AdminManagementPanel";
 
 export type Role =
   | "super_admin"
@@ -51,6 +58,66 @@ type PlatformSettings = {
   defaultDeliveryFee: number;
   deliveryFeePerKm: number;
   platformCommissionPercent: number;
+};
+
+type Notification = {
+  id: string;
+  type: string;
+  title: string;
+  message: string;
+  data: Record<string, unknown>;
+  is_read: boolean;
+  created_at: string;
+};
+
+type DashboardOrder = {
+  id: string;
+  status: string;
+  products_total: number;
+  delivery_fee: number;
+  total: number;
+  merchant_amount: number;
+  captain_amount: number;
+  created_at: string;
+};
+
+type DashboardTransaction = {
+  id: string;
+  kind: string;
+  direction: "credit" | "debit";
+  status: "pending" | "completed" | "failed";
+  amount: number;
+  note: string | null;
+  reference: string | null;
+  created_at: string;
+};
+
+type DashboardData = {
+  role: Role;
+  profile: { full_name: string | null; email?: string | null; phone: string | null } | null;
+  stats: {
+    users: number | null;
+    posts: number;
+    active_posts: number;
+    orders: number;
+    pending_orders: number;
+    completed_orders: number;
+    revenue: number;
+    platform_revenue: number | null;
+    unread_notifications: number;
+  };
+  orders: DashboardOrder[];
+  wallet: { balance: number; transactions: DashboardTransaction[] };
+  audit_logs: Record<string, unknown>[];
+};
+
+const emptyDashboardData: DashboardData = {
+  role: "customer",
+  profile: null,
+  stats: { users: null, posts: 0, active_posts: 0, orders: 0, pending_orders: 0, completed_orders: 0, revenue: 0, platform_revenue: null, unread_notifications: 0 },
+  orders: [],
+  wallet: { balance: 0, transactions: [] },
+  audit_logs: [],
 };
 
 const defaultSettings: PlatformSettings = {
@@ -94,6 +161,19 @@ export default function App() {
   const [customerGps, setCustomerGps] = useState<{ lat: number; lng: number } | null>(null);
   const [deliveryKm, setDeliveryKm] = useState<number | null>(null);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [dashboardData, setDashboardData] = useState<DashboardData>(emptyDashboardData);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState("");
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsError, setNotificationsError] = useState("");
+  const [notificationFilter, setNotificationFilter] = useState<"all" | "unread" | "read">("all");
+  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
+  const [showNotificationDropdown, setShowNotificationDropdown] = useState(false);
+  const [adminData, setAdminData] = useState<AdminManagementData>(emptyAdminManagementData);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminError, setAdminError] = useState("");
 
   const [captainForm, setCaptainForm] = useState({
     email: "",
@@ -111,6 +191,7 @@ export default function App() {
     const { data } = await supabase.auth.getSession();
     const email = data.session?.user.email ?? null;
     setSessionEmail(email);
+    setSessionUserId(data.session?.user.id ?? null);
     if (data.session?.user.id) {
       const { data: prof } = await supabase
         .from("profiles")
@@ -120,6 +201,69 @@ export default function App() {
       if (prof?.role) setProfileRole(prof.role as Role);
     }
   }, []);
+
+  const loadNotifications = useCallback(async () => {
+    if (!supabase || !sessionUserId) {
+      setNotifications([]);
+      setNotificationsError("");
+      return;
+    }
+    setNotificationsLoading(true);
+    setNotificationsError("");
+    const { data, error } = await supabase
+      .from("notifications")
+      .select("id,type,title,message,data,is_read,created_at")
+      .eq("user_id", sessionUserId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    setNotificationsLoading(false);
+    if (error || !data) {
+      setNotificationsError(t("ئاگادارییەکان بار نەکران", "تعذر تحميل الإشعارات", "Could not load notifications"));
+      return;
+    }
+    setNotifications(data as Notification[]);
+  }, [sessionUserId, lang]);
+
+  const loadDashboard = useCallback(async () => {
+    if (!supabase || !sessionUserId) {
+      setDashboardData(emptyDashboardData);
+      setDashboardError("");
+      return;
+    }
+    setDashboardLoading(true);
+    setDashboardError("");
+    const [dashboardResult, walletResult] = await Promise.all([
+      supabase.rpc("get_dashboard_data"),
+      supabase.rpc("get_wallet_summary"),
+    ]);
+    setDashboardLoading(false);
+    if (dashboardResult.error || walletResult.error || !dashboardResult.data || !walletResult.data) {
+      setDashboardData(emptyDashboardData);
+      setDashboardError(t("داتای داشبۆرد بار نەکرا", "تعذر تحميل بيانات لوحة التحكم", "Could not load dashboard data"));
+      return;
+    }
+    const dashboard = dashboardResult.data as DashboardData;
+    const wallet = walletResult.data as DashboardData["wallet"];
+    setDashboardData({ ...dashboard, wallet });
+  }, [sessionUserId, lang]);
+
+  const loadAdminData = useCallback(async () => {
+    if (!supabase || !sessionUserId || (role !== "admin" && role !== "super_admin")) {
+      setAdminData(emptyAdminManagementData);
+      setAdminError("");
+      return;
+    }
+    setAdminLoading(true);
+    setAdminError("");
+    const { data, error } = await supabase.rpc("get_admin_management_data");
+    setAdminLoading(false);
+    if (error || !data) {
+      setAdminData(emptyAdminManagementData);
+      setAdminError(t("داتای بەڕێوەبردن بار نەکرا", "تعذر تحميل بيانات الإدارة", "Could not load management data"));
+      return;
+    }
+    setAdminData(data as AdminManagementData);
+  }, [sessionUserId, role, lang]);
 
   const loadPosts = useCallback(async () => {
     if (!supabase) return;
@@ -142,6 +286,7 @@ export default function App() {
         owner: String(p.owner_id ?? "").slice(0, 8),
         status: p.status,
         attributes: (p.attributes ?? {}) as Record<string, string | number | boolean>,
+        images: (Array.isArray(p.images) ? (p.images as unknown[]) : []).filter((image: unknown): image is string => typeof image === "string"),
         lat: p.lat,
         lng: p.lng,
         locationLabel: p.location_label,
@@ -184,6 +329,31 @@ export default function App() {
     };
   }, [refreshSession, loadPosts, loadSettings]);
 
+  useEffect(() => {
+    loadNotifications();
+    const client = supabase;
+    if (!client || !sessionUserId) return;
+    const channel = client
+      .channel(`user-notifications-${sessionUserId}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${sessionUserId}` },
+        () => loadNotifications()
+      )
+      .subscribe();
+    return () => {
+      void client.removeChannel(channel);
+    };
+  }, [loadNotifications, sessionUserId]);
+
+  useEffect(() => {
+    void loadDashboard();
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    void loadAdminData();
+  }, [loadAdminData]);
+
   const visible = useMemo(
     () =>
       posts.filter(
@@ -212,17 +382,21 @@ export default function App() {
       settings.carListingFeeMin,
       Math.round(price * (settings.platformCommissionPercent / 100))
     );
-    const status = isCustomerCar ? "pending_review" : "active";
+    const status = isCustomerCar ? "pending_payment" : "active";
 
-    if (isCustomerCar && !draft.receiptUrl) {
-      setNotice(t("وێنەی وەسل پێویستە", "صورة الوصل مطلوبة", "Receipt required"));
+    if (isCustomerCar && (!draft.receiptUrl || !draft.paymentReference)) {
+      setNotice(t("وێنەی وەسل و ژمارەی سەرچاوە پێویستن", "صورة الوصل ومرجع الدفع مطلوبان", "Receipt and payment reference are required"));
+      return;
+    }
+    if (isCustomerCar && (!supabase || !sessionEmail)) {
+      setNotice(t("پشتڕاستکردنەوەی پارەدان پێویستی بە Supabase هەیە", "التحقق من الدفع يتطلب Supabase", "Payment verification requires Supabase"));
       return;
     }
 
     if (supabase && sessionEmail) {
       const user = (await supabase.auth.getUser()).data.user;
       if (!user) return;
-      const { error } = await supabase.from("posts").insert({
+      const { data: insertedPost, error } = await supabase.from("posts").insert({
         owner_id: user.id,
         category: draft.category,
         title,
@@ -234,13 +408,26 @@ export default function App() {
         lng: draft.lng,
         location_label: draft.locationLabel,
         contact_phone: String(draft.attrs.phone ?? ""),
+        images: draft.images,
+        image_url: draft.images[0] || null,
         receipt_url: draft.receiptUrl || null,
         listing_fee: isCustomerCar ? listingFee : 0,
-        listing_fee_paid: isCustomerCar,
-      });
+        listing_fee_paid: false,
+        payment_status: isCustomerCar ? "pending" : "not_required",
+      }).select("id").single();
       if (error) {
-        setNotice(error.message);
+        setNotice(t("پۆست دروست نەکرا", "تعذر إنشاء المنشور", "Could not create the post"));
         return;
+      }
+      if (isCustomerCar && insertedPost) {
+        const { data: verification, error: verificationError } = await supabase.functions.invoke("verify-car-listing-payment", {
+          body: { postId: insertedPost.id, paymentReference: draft.paymentReference },
+        });
+        if (verificationError || verification?.verified !== true) {
+          setNotice(t("پارەدان پشتڕاست نەکرایەوە", "تعذر التحقق من الدفع", "Payment could not be verified"));
+          await loadPosts();
+          return;
+        }
       }
       await loadPosts();
     } else {
@@ -255,6 +442,7 @@ export default function App() {
           owner: role,
           status,
           attributes: draft.attrs,
+          images: draft.images,
           lat: draft.lat,
           lng: draft.lng,
           locationLabel: draft.locationLabel,
@@ -282,6 +470,30 @@ export default function App() {
       setPosts((ps) => ps.map((p) => (p.id === id ? { ...p, status: "active" } : p)));
     }
     setNotice(t("پۆست پەسەند کرا", "تمت الموافقة", "Approved"));
+  }
+
+  async function performAdminAction(action: AdminAction, id: string, value: string | boolean) {
+    if (!supabase || (role !== "admin" && role !== "super_admin")) return;
+    const confirmation = action === "post_moderate" && value === "block"
+      ? t("ئەم پۆستە block بکرێت؟", "هل تريد حظر هذا المنشور؟", "Block this post?")
+      : action === "user_active" || action === "captain_active"
+        ? t("دۆخی چالاکی بگۆڕدرێت؟", "هل تريد تغيير حالة النشاط؟", "Change active status?")
+        : "";
+    if (confirmation && !window.confirm(confirmation)) return;
+    const rpc = action === "user_active"
+      ? supabase.rpc("admin_set_user_active", { p_user_id: id, p_is_active: value })
+      : action === "captain_active"
+        ? supabase.rpc("admin_set_captain_active", { p_captain_id: id, p_is_active: value })
+        : action === "post_moderate"
+          ? supabase.rpc("admin_moderate_post", { p_post_id: id, p_action: value })
+          : supabase.rpc("admin_set_order_status", { p_order_id: id, p_status: value });
+    const { error } = await rpc;
+    if (error) {
+      setNotice(t("کردارەکە سەرکەوتوو نەبوو", "تعذر تنفيذ العملية", "Action failed"));
+      return;
+    }
+    await Promise.all([loadAdminData(), loadPosts(), loadDashboard()]);
+    setNotice(t("کردارەکە جێبەجێ کرا", "تم تنفيذ العملية", "Action completed"));
   }
 
   async function saveCommission() {
@@ -331,6 +543,27 @@ export default function App() {
     setTab("dashboard");
   }
 
+  async function markNotificationRead(id: string) {
+    if (!supabase) return;
+    const { error } = await supabase.from("notifications").update({ is_read: true }).eq("id", id);
+    if (!error) {
+      setNotifications((items) => items.map((item) => (item.id === id ? { ...item, is_read: true } : item)));
+      setSelectedNotification((item) => (item?.id === id ? { ...item, is_read: true } : item));
+    }
+  }
+
+  async function markAllNotificationsRead() {
+    if (!supabase || !sessionUserId) return;
+    const { error } = await supabase.from("notifications").update({ is_read: true }).eq("user_id", sessionUserId).eq("is_read", false);
+    if (!error) setNotifications((items) => items.map((item) => ({ ...item, is_read: true })));
+  }
+
+  async function deleteNotification(id: string) {
+    if (!supabase) return;
+    const { error } = await supabase.from("notifications").delete().eq("id", id);
+    if (!error) setNotifications((items) => items.filter((item) => item.id !== id));
+  }
+
   async function createCaptain(e: React.FormEvent) {
     e.preventDefault();
     if (!supabase) {
@@ -341,42 +574,26 @@ export default function App() {
       setNotice(t("تەنها سوپەر ئەدمین", "للمشرف فقط", "Super admin only"));
       return;
     }
-    if (captainForm.kind === "merchant" && !merchantRoles.includes(role)) {
-      setNotice(t("تەنها دوکاندار", "للتاجر فقط", "Merchants only"));
+    if (role !== "admin" && role !== "super_admin") {
+      setNotice(t("تەنها ئەدمین دەتوانێت کاپتن دروست بکات", "المشرف فقط يستطيع إنشاء كابتن", "Only admins can create captains"));
       return;
     }
-    setNotice(
-      t(
-        "لە پرۆداکشن: Edge Function بۆ دروستکردنی کاپتن بەکاربهێنە (ئەم فۆرمە ئیمەیڵ/وشەی نهێنی دەنێرێت).",
-        "في الإنتاج: استخدم Edge Function لإنشاء الكابتن.",
-        "In production use an Edge Function to create captain accounts."
-      )
-    );
-    const { data, error } = await supabase.auth.signUp({
-      email: captainForm.email,
-      password: captainForm.password,
-      options: {
-        data: {
-          full_name: captainForm.fullName,
-          phone: captainForm.phone,
-          role: "captain",
-          captain_kind: captainForm.kind,
-        },
+    const { data, error } = await supabase.functions.invoke("create-captain", {
+      body: {
+        email: captainForm.email,
+        password: captainForm.password,
+        fullName: captainForm.fullName,
+        phone: captainForm.phone,
+        kind: captainForm.kind,
       },
     });
     if (error) {
-      setNotice(error.message);
+      setNotice(t("دروستکردنی کاپتن سەرکەوتوو نەبوو", "تعذر إنشاء الكابتن", "Captain creation failed"));
       return;
     }
-    if (data.user) {
-      await supabase.from("profiles").upsert({
-        id: data.user.id,
-        full_name: captainForm.fullName,
-        phone: captainForm.phone,
-        role: "captain",
-        captain_kind: captainForm.kind,
-        captain_owner_id: captainForm.kind === "merchant" ? (await supabase.auth.getUser()).data.user?.id : null,
-      });
+    if (!data?.success) {
+      setNotice(t("دروستکردنی کاپتن سەرکەوتوو نەبوو", "تعذر إنشاء الكابتن", "Captain creation failed"));
+      return;
     }
     setCaptainForm({ email: "", password: "", fullName: "", phone: "", kind: "merchant" });
     setNotice(t("داواکاری کاپتن دروست کرا", "تم إنشاء الكابتن", "Captain created"));
@@ -436,6 +653,33 @@ export default function App() {
             <ShoppingCart size={19} />
             <span>{cart.length}</span>
           </button>
+          <button
+            type="button"
+            className="iconbtn notification-button"
+            onClick={() => setShowNotificationDropdown((open) => !open)}
+            aria-label={t("ئاگادارییەکان", "الإشعارات", "Notifications")}
+          >
+            <Bell size={19} />
+            {notifications.some((item) => !item.is_read) && <span className="notification-count">{notifications.filter((item) => !item.is_read).length}</span>}
+          </button>
+          {showNotificationDropdown && (
+            <NotificationDropdown
+              notifications={notifications.slice(0, 5)}
+              loading={notificationsLoading}
+              error={notificationsError}
+              t={t}
+              onSelect={(item) => {
+                setSelectedNotification(item);
+                setShowNotificationDropdown(false);
+                setTab("notifications");
+                if (!item.is_read) void markNotificationRead(item.id);
+              }}
+              onViewAll={() => {
+                setShowNotificationDropdown(false);
+                setTab("notifications");
+              }}
+            />
+          )}
           <button type="button" className="avatar" onClick={() => setTab("account")}>
             <UserRound size={19} />
           </button>
@@ -485,10 +729,16 @@ export default function App() {
               {t("پۆستی نوێ", "منشور جديد", "New post")}
             </button>
           )}
-          {(merchantRoles.includes(role) || role === "super_admin") && (
+          {(role === "admin" || role === "super_admin") && (
             <button type="button" onClick={() => setTab("captains")}>
               <Bike />
               {t("کاپتن", "كابتن", "Captains")}
+            </button>
+          )}
+          {(role === "admin" || role === "super_admin") && (
+            <button type="button" onClick={() => setTab("admin-management")}>
+              <ShieldCheck />
+              {t("بەڕێوەبردنی سیستەم", "إدارة النظام", "Admin management")}
             </button>
           )}
         </aside>
@@ -597,14 +847,30 @@ export default function App() {
             />
           )}
 
+          {tab === "notifications" && (
+            <NotificationPanel
+              notifications={notifications}
+              loading={notificationsLoading}
+              error={notificationsError}
+              filter={notificationFilter}
+              selectedNotification={selectedNotification}
+              onFilterChange={setNotificationFilter}
+              onRetry={() => void loadNotifications()}
+              onSelect={setSelectedNotification}
+              t={t}
+              onMarkRead={markNotificationRead}
+              onMarkAllRead={markAllNotificationsRead}
+              onDelete={deleteNotification}
+            />
+          )}
+
           {tab === "wallet" && (
             <WalletPanel
               money={money}
               t={t}
-              settings={settings}
-              deliveryFee={deliveryFee}
-              captainPlatform={captainPlatform}
-              captainKeep={captainKeep}
+              data={dashboardData}
+              loading={dashboardLoading}
+              error={dashboardError}
             />
           )}
 
@@ -669,6 +935,22 @@ export default function App() {
               deliveryKm={deliveryKm}
               setDeliveryKm={setDeliveryKm}
               customerGps={customerGps}
+              data={dashboardData}
+              loading={dashboardLoading}
+              error={dashboardError}
+              notificationCount={notifications.filter((item) => !item.is_read).length}
+            />
+          )}
+
+          {tab === "admin-management" && (
+            <AdminManagementPanel
+              role={role}
+              t={t}
+              data={adminData}
+              loading={adminLoading}
+              error={adminError}
+              onRetry={() => void loadAdminData()}
+              onAction={performAdminAction}
             />
           )}
 
@@ -753,6 +1035,150 @@ export default function App() {
   );
 }
 
+function NotificationDropdown({
+  notifications,
+  loading,
+  error,
+  t,
+  onSelect,
+  onViewAll,
+}: {
+  notifications: Notification[];
+  loading: boolean;
+  error: string;
+  t: (ku: string, ar: string, en: string) => string;
+  onSelect: (notification: Notification) => void;
+  onViewAll: () => void;
+}) {
+  return (
+    <div className="notification-dropdown">
+      <div className="notification-dropdown-head">
+        <b>{t("نوێترین ئاگادارییەکان", "أحدث الإشعارات", "Latest notifications")}</b>
+        <button type="button" className="text-button" onClick={onViewAll}>
+          {t("هەموو", "الكل", "View all")}
+        </button>
+      </div>
+      {loading ? (
+        <p className="notification-state">{t("بارکردن...", "جار التحميل...", "Loading...")}</p>
+      ) : error ? (
+        <p className="notification-state notification-error">{error}</p>
+      ) : notifications.length === 0 ? (
+        <p className="notification-state">{t("هیچ ئاگادارییەک نییە", "لا توجد إشعارات", "No notifications yet")}</p>
+      ) : (
+        <div className="notification-dropdown-list">
+          {notifications.map((item) => (
+            <button key={item.id} type="button" className={`notification-preview ${item.is_read ? "read" : "unread"}`} onClick={() => onSelect(item)}>
+              <span>
+                <b>{item.title}</b>
+                <small>{item.message}</small>
+              </span>
+              {!item.is_read && <i aria-label={t("نوێ", "جديد", "Unread")} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificationPanel({
+  notifications,
+  loading,
+  error,
+  filter,
+  selectedNotification,
+  onFilterChange,
+  onRetry,
+  onSelect,
+  t,
+  onMarkRead,
+  onMarkAllRead,
+  onDelete,
+}: {
+  notifications: Notification[];
+  loading: boolean;
+  error: string;
+  filter: "all" | "unread" | "read";
+  selectedNotification: Notification | null;
+  onFilterChange: (filter: "all" | "unread" | "read") => void;
+  onRetry: () => void;
+  onSelect: (notification: Notification | null) => void;
+  t: (ku: string, ar: string, en: string) => string;
+  onMarkRead: (id: string) => void;
+  onMarkAllRead: () => void;
+  onDelete: (id: string) => void;
+}) {
+  const filteredNotifications = notifications.filter((item) =>
+    filter === "all" ? true : filter === "unread" ? !item.is_read : item.is_read
+  );
+
+  return (
+    <div className="panel notifications-panel">
+      <div className="section-head">
+        <div>
+          <h2>{t("ئاگادارییەکان", "الإشعارات", "Notifications")}</h2>
+          <p>{t("نوێترین ئاگادارییەکانی هەژمارەکەت", "أحدث إشعارات حسابك", "Your latest account notifications")}</p>
+        </div>
+        {notifications.some((item) => !item.is_read) && (
+          <button type="button" className="secondary" onClick={onMarkAllRead}>
+            {t("هەمووی بخوێنەوە", "تحديد الكل كمقروء", "Mark all read")}
+          </button>
+        )}
+      </div>
+      <div className="notification-filters" role="group" aria-label={t("جۆری ئاگاداری", "نوع الإشعارات", "Notification filter")}>
+        {(["all", "unread", "read"] as const).map((value) => (
+          <button key={value} type="button" className={filter === value ? "selected" : ""} onClick={() => onFilterChange(value)}>
+            {value === "all" ? t("هەموو", "الكل", "All") : value === "unread" ? t("نەخوێندراوە", "غير مقروء", "Unread") : t("خوێندراوە", "مقروء", "Read")}
+          </button>
+        ))}
+      </div>
+      {loading ? (
+        <div className="notification-state">{t("بارکردنی ئاگادارییەکان...", "جار تحميل الإشعارات...", "Loading notifications...")}</div>
+      ) : error ? (
+        <div className="notification-state notification-error">
+          <p>{error}</p>
+          <button type="button" className="secondary" onClick={onRetry}>{t("دووبارە هەوڵبدە", "أعد المحاولة", "Retry")}</button>
+        </div>
+      ) : filteredNotifications.length === 0 ? (
+        <div className="empty-state">{t("هیچ ئاگادارییەک نییە", "لا توجد إشعارات", "No notifications yet")}</div>
+      ) : (
+        <div className="notification-list">
+          {filteredNotifications.map((item) => (
+            <article key={item.id} className={`notification-item ${item.is_read ? "read" : "unread"}`}>
+              <div>
+                <button type="button" className="notification-detail-trigger" onClick={() => onSelect(item)}><b>{item.title}</b></button>
+                <p>{item.message}</p>
+                <small>{new Date(item.created_at).toLocaleString()}</small>
+              </div>
+              <div className="notification-actions">
+                {!item.is_read && (
+                  <button type="button" className="secondary small" onClick={() => onMarkRead(item.id)}>
+                    {t("خوێندرایەوە", "تمت القراءة", "Read")}
+                  </button>
+                )}
+                <button type="button" className="iconbtn" onClick={() => onDelete(item.id)} aria-label={t("سڕینەوە", "حذف", "Delete")}>
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {selectedNotification && (
+        <div className="notification-detail">
+          <div className="section-head">
+            <h3>{selectedNotification.title}</h3>
+            <button type="button" className="iconbtn" onClick={() => onSelect(null)} aria-label={t("داخستن", "إغلاق", "Close")}><X size={16} /></button>
+          </div>
+          <p>{selectedNotification.message}</p>
+          <small>{new Date(selectedNotification.created_at).toLocaleString()}</small>
+          {Object.keys(selectedNotification.data).length > 0 && <pre>{JSON.stringify(selectedNotification.data, null, 2)}</pre>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CartPanel({
   cart,
   setCart,
@@ -808,45 +1234,47 @@ function CartPanel({
 function WalletPanel({
   money,
   t,
-  settings,
-  deliveryFee,
-  captainPlatform,
-  captainKeep,
+  data,
+  loading,
+  error,
 }: {
   money: (n: number) => string;
   t: (a: string, b: string, c: string) => string;
-  settings: PlatformSettings;
-  deliveryFee: number;
-  captainPlatform: number;
-  captainKeep: number;
+  data: DashboardData;
+  loading: boolean;
+  error: string;
 }) {
   return (
     <div className="panel">
-      <h2>{t("پارە و دابەشکردن", "المحفظة", "Wallet & splits")}</h2>
-      <div className="walletbig">
-        {money(1250000)}
-        <small>{t("نموونە", "تجريبي", "Demo balance")}</small>
-      </div>
-      <div className="cartrow">
-        <span>{t("کرێی گەیاندن", "رسوم التوصيل", "Delivery fee")}</span>
-        <b>{money(deliveryFee)}</b>
-      </div>
-      <div className="cartrow">
-        <span>
-          {t("بەشی شاخ لە گەیاندن", "حصة المنصة", "Platform share")} ({settings.captainPlatformPercent}%)
-        </span>
-        <b>{money(captainPlatform)}</b>
-      </div>
-      <div className="cartrow">
-        <span>
-          {t("بەشی کاپتن", "حصة الكابتن", "Captain share")} ({settings.captainSharePercent}%)
-        </span>
-        <b>{money(captainKeep)}</b>
-      </div>
-      <div className="cartrow">
-        <span>{t("نیسبەی دوکاندار", "عمولة التاجر", "Merchant commission")}</span>
-        <b>{settings.platformCommissionPercent}%</b>
-      </div>
+      <h2>{t("پارە", "المحفظة", "Wallet")}</h2>
+      {loading ? (
+        <div className="dashboard-state">{t("بارکردن...", "جار التحميل...", "Loading...")}</div>
+      ) : error ? (
+        <div className="dashboard-state dashboard-error">{error}</div>
+      ) : (
+        <>
+          <div className="walletbig">
+            {money(Number(data.wallet.balance))}
+            <small>{t("باڵانسی ڕاستەقینە", "الرصيد الحالي", "Current balance")}</small>
+          </div>
+          <h3>{t("مامەڵەکان", "المعاملات", "Transactions")}</h3>
+          {data.wallet.transactions.length === 0 ? (
+            <div className="empty-state">{t("هیچ مامەڵەیەک نییە", "لا توجد معاملات", "No transactions yet")}</div>
+          ) : (
+            data.wallet.transactions.map((transaction) => (
+              <div className="cartrow" key={transaction.id}>
+                <span>
+                  {transaction.note || transaction.kind}
+                  <small>{transaction.status} · {transaction.reference || new Date(transaction.created_at).toLocaleString()}</small>
+                </span>
+                <b className={transaction.direction === "debit" ? "wallet-debit" : "wallet-credit"}>
+                  {transaction.direction === "debit" ? "-" : "+"}{money(Number(transaction.amount))}
+                </b>
+              </div>
+            ))
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -863,6 +1291,10 @@ function DashboardPanel({
   deliveryKm,
   setDeliveryKm,
   customerGps,
+  data,
+  loading,
+  error,
+  notificationCount,
 }: {
   t: (a: string, b: string, c: string) => string;
   role: Role;
@@ -875,6 +1307,10 @@ function DashboardPanel({
   deliveryKm: number | null;
   setDeliveryKm: (n: number | null) => void;
   customerGps: { lat: number; lng: number } | null;
+  data: DashboardData;
+  loading: boolean;
+  error: string;
+  notificationCount: number;
 }) {
   const storeLat = 33.3152;
   const storeLng = 44.3661;
@@ -884,27 +1320,44 @@ function DashboardPanel({
     }
   }, [customerGps, setDeliveryKm]);
 
+  if (loading) {
+    return <div className="panel dashboard-state">{t("بارکردنی داشبۆرد...", "جار تحميل لوحة التحكم...", "Loading dashboard...")}</div>;
+  }
+
+  if (error) {
+    return <div className="panel dashboard-state dashboard-error">{error}</div>;
+  }
+
   return (
     <div className="panel">
       <h2>{t("داشبۆرد", "لوحة التحكم", "Dashboard")}</h2>
+      <div className="dashboard-profile">
+        <b>{data.profile?.full_name || t("بێ ناو", "بدون اسم", "Unnamed profile")}</b>
+        <span>{data.profile?.phone || t("ژمارەی مۆبایل نییە", "لا يوجد هاتف", "No phone")}</span>
+      </div>
       <div className="stats">
-        <div>
-          <Package />
-          <b>{posts.length}</b>
-          <span>{t("پۆست", "منشورات", "Posts")}</span>
-        </div>
-        <div>
-          <Bike />
-          <b>{deliveryKm != null ? deliveryKm.toFixed(1) + " km" : "—"}</b>
-          <span>{t("دووری گەیاندن", "مسافة التوصيل", "Delivery distance")}</span>
-        </div>
-        <div>
-          <Wallet />
-          <b>
-            {settings.captainPlatformPercent}/{settings.captainSharePercent}
-          </b>
-          <span>{t("شاخ/کاپتن %", "منصة/كابتن", "Platform/captain %")}</span>
-        </div>
+        {data.stats.users !== null && <DashboardStat icon={<UserRound />} value={data.stats.users} label={t("بەکارهێنەران", "المستخدمون", "Users")} />}
+        <DashboardStat icon={<Package />} value={data.stats.posts} label={t("پۆستەکان", "المنشورات", "Posts")} />
+        <DashboardStat icon={<Bike />} value={data.stats.orders} label={t("داواکارییەکان", "الطلبات", "Orders")} />
+        <DashboardStat icon={<Wallet />} value={moneyValue(data.stats.revenue)} label={t("داهات", "الإيرادات", "Revenue")} />
+        <DashboardStat icon={<Package />} value={data.stats.pending_orders} label={t("چاوەڕوان", "قيد الانتظار", "Pending")} />
+        <DashboardStat icon={<CheckCircle2 />} value={data.stats.completed_orders} label={t("تەواوکراو", "مكتملة", "Completed")} />
+        {notificationCount > 0 && <DashboardStat icon={<Bell />} value={notificationCount} label={t("ئاگادارییە نەخوێندراوەکان", "الإشعارات غير المقروءة", "Unread notifications")} />}
+        {role === "super_admin" && data.stats.platform_revenue !== null && <DashboardStat icon={<Wallet />} value={moneyValue(data.stats.platform_revenue)} label={t("داهاتی پلاتفۆرم", "إيرادات المنصة", "Platform revenue")} />}
+      </div>
+
+      <div className="dashboard-section">
+        <h3>{t("داواکارییە نوێکان", "الطلبات الأخيرة", "Recent orders")}</h3>
+        {data.orders.length === 0 ? (
+          <div className="empty-state">{t("هیچ داواکارییەک نییە", "لا توجد طلبات", "No orders yet")}</div>
+        ) : (
+          data.orders.slice(0, 10).map((order) => (
+            <div className="cartrow" key={order.id}>
+              <span>#{order.id.slice(0, 8)}<small>{order.status}</small></span>
+              <b>{moneyValue(Number(order.total))}</b>
+            </div>
+          ))
+        )}
       </div>
 
       {role === "super_admin" && pendingReview.length > 0 && (
@@ -973,6 +1426,31 @@ function DashboardPanel({
           </button>
         </div>
       )}
+
+      {role === "super_admin" && (
+        <div className="dashboard-section">
+          <h3>{t("تۆمارەکانی سیستەم", "سجل النظام", "Audit logs")}</h3>
+          {data.audit_logs.length === 0 ? (
+            <div className="empty-state">{t("هیچ تۆمارێک نییە", "لا توجد سجلات", "No audit logs yet")}</div>
+          ) : (
+            data.audit_logs.slice(0, 10).map((log, index) => <pre className="audit-row" key={String(log.id ?? index)}>{JSON.stringify(log)}</pre>)
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function moneyValue(value: number) {
+  return new Intl.NumberFormat("en-US").format(value) + " د.ع";
+}
+
+function DashboardStat({ icon, value, label }: { icon: React.ReactNode; value: number | string; label: string }) {
+  return (
+    <div>
+      {icon}
+      <b>{value}</b>
+      <span>{label}</span>
     </div>
   );
 }

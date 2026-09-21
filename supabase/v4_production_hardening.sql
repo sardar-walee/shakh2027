@@ -12,6 +12,25 @@ create table if not exists public.notifications(
   created_at timestamptz not null default now()
 );
 
+-- legacy_compatibility.sql may already have created notifications with
+-- body/read_at/metadata. Keep those columns and add the v4 contract safely.
+alter table public.notifications add column if not exists body text;
+alter table public.notifications add column if not exists metadata jsonb;
+alter table public.notifications add column if not exists read_at timestamptz;
+alter table public.notifications add column if not exists message text;
+alter table public.notifications add column if not exists data jsonb;
+alter table public.notifications add column if not exists is_read boolean;
+update public.notifications
+set message = coalesce(message, body, ''),
+    data = coalesce(data, metadata, '{}'::jsonb),
+    is_read = coalesce(is_read, read_at is not null, false);
+alter table public.notifications alter column message set default '';
+alter table public.notifications alter column message set not null;
+alter table public.notifications alter column data set default '{}'::jsonb;
+alter table public.notifications alter column data set not null;
+alter table public.notifications alter column is_read set default false;
+alter table public.notifications alter column is_read set not null;
+
 alter table public.notifications enable row level security;
 drop policy if exists "users read own notifications" on public.notifications;
 drop policy if exists "users update own notifications" on public.notifications;
@@ -20,6 +39,20 @@ create policy "users read own notifications" on public.notifications for select 
 create policy "users update own notifications" on public.notifications for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "users delete own notifications" on public.notifications for delete using (auth.uid() = user_id);
 create index if not exists notifications_user_created_at_idx on public.notifications(user_id, created_at desc);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'notifications'
+  ) then
+    alter publication supabase_realtime add table public.notifications;
+  end if;
+end $$;
+
+alter table public.notifications replica identity full;
 
 do $$
 declare policy_row record;

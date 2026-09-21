@@ -4,6 +4,14 @@
 - [ ] Run `supabase/v2_migration.sql`
 - [ ] Run `supabase/v3_migration.sql`
 - [ ] Run `supabase/v4_production_hardening.sql` after `production_repair.sql`
+- [ ] Run `supabase/v5_dashboard_rpc.sql` after v4
+- [ ] Run `supabase/v6_wallet_hardening.sql` after v5
+- [ ] Run `supabase/v7_car_payment_verification.sql` after v6
+- [ ] Run `supabase/v8_admin_management.sql` after v7
+- [ ] Run `supabase/v9_live_compatibility.sql` before v10
+- [ ] Run `supabase/v10_posts_owner_compatibility.sql` after v9
+- [ ] Deploy `supabase/functions/create-captain`
+- [ ] Set `SUPABASE_SERVICE_ROLE_KEY` only as an Edge Function secret
 - [ ] Point domain **daim-post.online** to Vercel (see `vercel.json`)
 - [ ] Create a Supabase Auth user
 - [ ] Insert/update the matching row in `profiles`

@@ -10,6 +10,10 @@ import {
 } from "../config/postFields";
 import { GpsPicker } from "./GpsPicker";
 import { Plus, Upload } from "lucide-react";
+import { supabase } from "../lib/supabase";
+import { uploadImage } from "../lib/storage";
+
+type ImageDraft = { file: File; previewUrl: string };
 
 export type PostDraft = {
   category: PostCategory;
@@ -18,6 +22,8 @@ export type PostDraft = {
   lng: number | null;
   locationLabel: string;
   receiptUrl: string;
+  paymentReference: string;
+  images: string[];
   imageEmoji: string;
 };
 
@@ -29,7 +35,7 @@ type Props = {
   categories: { id: PostCategory; label: string }[];
   isCarByCustomer: boolean;
   listingFee: number;
-  onSubmit: (draft: PostDraft) => void;
+  onSubmit: (draft: PostDraft) => Promise<void> | void;
 };
 
 function label(field: PostField, lang: Lang) {
@@ -51,6 +57,11 @@ export function DynamicPostForm({
   const [lng, setLng] = useState<number | null>(null);
   const [locationLabel, setLocationLabel] = useState("");
   const [receiptUrl, setReceiptUrl] = useState("");
+  const [paymentReference, setPaymentReference] = useState("");
+  const [imageDrafts, setImageDrafts] = useState<ImageDraft[]>([]);
+  const [imageError, setImageError] = useState("");
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [emoji, setEmoji] = useState("📦");
 
   const fields = fieldsByCategory[category];
@@ -128,17 +139,75 @@ export function DynamicPostForm({
     );
   }
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    onSubmit({
-      category,
-      attrs,
-      lat,
-      lng,
-      locationLabel,
-      receiptUrl,
-      imageEmoji: category === "car_dealer" ? "🚗" : emoji,
+  function addImages(e: React.ChangeEvent<HTMLInputElement>) {
+    setImageError("");
+    const files = Array.from(e.target.files ?? []);
+    const accepted = files.filter((file) => {
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+        setImageError(t("تەنها JPG، PNG یان WebP", "يسمح فقط JPG أو PNG أو WebP", "Only JPG, PNG, or WebP images are allowed"));
+        return false;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        setImageError(t("قەبارەی وێنە نابێت لە 5MB زیاتر بێت", "حجم الصورة يجب ألا يتجاوز 5MB", "Each image must be 5MB or smaller"));
+        return false;
+      }
+      return true;
     });
+    const remaining = Math.max(0, 8 - imageDrafts.length);
+    setImageDrafts((items) => [...items, ...accepted.slice(0, remaining).map((file) => ({ file, previewUrl: URL.createObjectURL(file) }))]);
+    e.target.value = "";
+  }
+
+  function removeImage(index: number) {
+    setImageDrafts((items) => {
+      URL.revokeObjectURL(items[index].previewUrl);
+      return items.filter((_, itemIndex) => itemIndex !== index);
+    });
+  }
+
+  function moveImage(index: number, direction: -1 | 1) {
+    setImageDrafts((items) => {
+      const target = index + direction;
+      if (target < 0 || target >= items.length) return items;
+      const next = [...items];
+      [next[index], next[target]] = [next[target], next[index]];
+      return next;
+    });
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setImageError("");
+    setSubmitting(true);
+    try {
+      const uploadedImages: string[] = [];
+      if (imageDrafts.length > 0) {
+        const user = (await supabase?.auth.getUser())?.data.user;
+        if (!user) throw new Error("authentication_required");
+        for (const [index, image] of imageDrafts.entries()) {
+          const uploaded = await uploadImage(image.file, user.id, (percent) => {
+            setUploadProgress(Math.round(((index + percent / 100) / imageDrafts.length) * 100));
+          });
+          uploadedImages.push(uploaded.publicUrl);
+        }
+      }
+      await onSubmit({
+        category,
+        attrs,
+        lat,
+        lng,
+        locationLabel,
+        receiptUrl,
+        paymentReference,
+        images: uploadedImages,
+        imageEmoji: category === "car_dealer" ? "🚗" : emoji,
+      });
+    } catch {
+      setImageError(t("نەتوانرا وێنەکان upload بکرێن", "تعذر رفع الصور", "Images could not be uploaded"));
+    } finally {
+      setSubmitting(false);
+      setUploadProgress(null);
+    }
   }
 
   const price = postPriceFromAttributes(attrs);
@@ -205,6 +274,28 @@ export function DynamicPostForm({
         </>
       )}
 
+      <div className="image-upload-section">
+        <label className="field-label">{t("وێنەکان", "الصور", "Images")}</label>
+        <input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addImages} disabled={submitting} />
+        <small>{t("تا 8 وێنە، هەر یەکێک تا 5MB", "حتى 8 صور، 5MB لكل صورة", "Up to 8 images, 5MB each")}</small>
+        {imageError && <p className="form-err">{imageError}</p>}
+        {uploadProgress !== null && <progress className="upload-progress" value={uploadProgress} max={100}>{uploadProgress}%</progress>}
+        {imageDrafts.length > 0 && (
+          <div className="image-draft-grid">
+            {imageDrafts.map((image, index) => (
+              <div className="image-draft" key={image.previewUrl}>
+                <img src={image.previewUrl} alt={image.file.name} />
+                <div>
+                  <button type="button" onClick={() => moveImage(index, -1)} disabled={index === 0}>↑</button>
+                  <button type="button" onClick={() => moveImage(index, 1)} disabled={index === imageDrafts.length - 1}>↓</button>
+                  <button type="button" onClick={() => removeImage(index)}>{t("سڕینەوە", "حذف", "Remove")}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {isCarByCustomer && category === "car_dealer" && (
         <div className="fee-box">
           <p>
@@ -230,6 +321,17 @@ export function DynamicPostForm({
               required
             />
           </div>
+          <label className="field-label">
+            {t("ژمارەی سەرچاوەی پارەدان", "مرجع الدفع", "Payment reference")}
+          </label>
+          <input
+            value={paymentReference}
+            onChange={(e) => setPaymentReference(e.target.value)}
+            placeholder={t("ژمارەی سەرچاوە", "رقم المرجع", "Provider reference")}
+            required
+            minLength={4}
+            maxLength={200}
+          />
         </div>
       )}
 
@@ -237,7 +339,7 @@ export function DynamicPostForm({
         {t("پیشاندان", "معاينة", "Preview")}: {postTitleFromAttributes(category, attrs)}
       </p>
 
-      <button type="submit" className="primary">
+      <button type="submit" className="primary" disabled={submitting}>
         <Plus size={17} /> {t("پۆستکردن", "نشر", "Publish")}
       </button>
     </form>
