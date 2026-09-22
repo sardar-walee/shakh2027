@@ -12,7 +12,10 @@ type Props = {
 };
 
 export function AuthPanel({ t, onSuccess, email, onSignOut }: Props) {
-  const [mode, setMode] = useState<Mode>("login");
+  const [mode, setMode] = useState<Mode>(() => {
+    const isRecovery = new URLSearchParams(window.location.search).get("reset") === "1";
+    return isRecovery ? "update" : "login";
+  });
   const [form, setForm] = useState({
     email: "",
     password: "",

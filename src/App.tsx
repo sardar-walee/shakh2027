@@ -142,7 +142,10 @@ const merchantRoles: Role[] = ["restaurant", "supermarket", "fashion", "beauty",
 
 export default function App() {
   const [lang, setLang] = useState<Lang>("ku");
-  const [tab, setTab] = useState("home");
+  const [tab, setTab] = useState(() => {
+    const isRecovery = new URLSearchParams(window.location.search).get("reset") === "1";
+    return isRecovery ? "account" : "home";
+  });
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<string>("all");
   const [cart, setCart] = useState<DisplayPost[]>([]);
@@ -367,14 +370,27 @@ export default function App() {
 
   const canPostMerchant = merchantRoles.includes(role);
   const canPostCarAsCustomer = role === "customer";
-  const canPost = canPostMerchant || canPostCarAsCustomer;
+  const canPost = role === "super_admin" || canPostMerchant || canPostCarAsCustomer;
+  const allowedPostCategories: PostCategory[] =
+    role === "super_admin"
+      ? roleMeta.filter((item) => item.id !== "captain").map((item) => item.id as PostCategory)
+      : canPostCarAsCustomer
+        ? ["car_dealer"]
+        : canPostMerchant
+          ? [role as PostCategory]
+          : [];
   const pendingReview = posts.filter((p) => p.status === "pending_review");
 
   const postCategories = roleMeta
     .filter((r) => r.id !== "captain")
+    .filter((r) => allowedPostCategories.includes(r.id as PostCategory))
     .map((r) => ({ id: r.id as PostCategory, label: t(r.ku, r.ar, r.en) }));
 
   async function handlePostSubmit(draft: PostDraft) {
+    if (!allowedPostCategories.includes(draft.category)) {
+      setNotice(t("ئەم جۆرە پۆستە بۆ ڕۆڵی تۆ ڕێگەپێدراو نییە", "هذا النوع غير مسموح لدورك", "This post category is not allowed for your role"));
+      return;
+    }
     const title = postTitleFromAttributes(draft.category, draft.attrs);
     const price = postPriceFromAttributes(draft.attrs);
     const isCustomerCar = role === "customer" && draft.category === "car_dealer";
@@ -825,9 +841,7 @@ export default function App() {
               category={postCategory}
               onCategoryChange={setPostCategory}
               categories={
-                canPostCarAsCustomer && !canPostMerchant
-                  ? [{ id: "car_dealer", label: t("ئۆتۆمبێل", "سيارات", "Cars") }]
-                  : postCategories
+                postCategories
               }
               isCarByCustomer={canPostCarAsCustomer && !canPostMerchant}
               listingFee={settings.carListingFeeMin}
